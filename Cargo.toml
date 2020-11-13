@@ -1,0 +1,14 @@
+[package]
+name = "shootadoc-rust"
+version = "0.1.0"
+authors = ["Antti Kaihola <antti.kaihola@eniram.fi>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+image = "0.23.11"
+image-diff = "0.1.13"
+
+[profile.release]
+lto = true
