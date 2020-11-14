@@ -33,7 +33,8 @@ fn main() {
         let orig = img.view(0, 0, win_width, win_height).to_image();
         let left = img.view(offset, 0, win_width, win_height).to_image();
         let up = img.view(0, offset, win_width, win_height).to_image();
-        img = brightest(&brightest(&orig, &left), &brightest(&orig, &up));
+        let diag = img.view(offset, offset, win_width, win_height).to_image();
+        img = brightest(&brightest(&orig, &left), &brightest(&up, &diag));
     }
     img.save("/tmp/paper.png").unwrap();
 }
