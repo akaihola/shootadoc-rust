@@ -21,10 +21,9 @@ where
     ImageBuffer::from_fn(img1.width(), img1.height(), |x, y| {
         let p1 = img1.get_pixel(x, y);
         let p2 = img2.get_pixel(x, y);
-        if p1.to_luma()[0] < p2.to_luma()[0] {
-            p2
-        } else {
-            p1
+        match compare(p1.to_luma()[0], p2.to_luma()[0]) {
+            true => p1,
+            false => p2,
         }
     })
 }
