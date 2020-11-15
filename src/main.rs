@@ -12,7 +12,7 @@ fn log_2(x: u32) -> u32 {
     num_bits::<u32>() as u32 - x.leading_zeros() - 1
 }
 
-fn brightest<I, P, S>(img1: &I, img2: &I) -> ImageBuffer<P, Vec<S>>
+fn brightest<I, P, S>(img1: I, img2: I) -> ImageBuffer<P, Vec<S>>
 where
     I: GenericImageView<Pixel = P>,
     P: Pixel<Subpixel = S> + 'static,
@@ -43,9 +43,9 @@ fn main() {
             let left = img.view(offset, 0, win_width, win_height);
             let up = img.view(0, offset, win_width, win_height);
             let diag = img.view(offset, offset, win_width, win_height);
-            let top_pixels = brightest(&orig, &left);
-            let bottom_pixels = brightest(&up, &diag);
-            img = brightest(&top_pixels, &bottom_pixels);
+            let top_pixels = brightest(orig, left);
+            let bottom_pixels = brightest(up, diag);
+            img = brightest(top_pixels, bottom_pixels);
         }
         img.save(cli::get_out_fname(&f)).unwrap();
     }
