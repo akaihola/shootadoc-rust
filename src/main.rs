@@ -1,4 +1,6 @@
-use image::{open, GenericImageView, ImageBuffer, Pixel, Primitive};
+use image::imageops::replace;
+use image::math::Rect;
+use image::{open, GenericImage, GenericImageView, ImageBuffer, Pixel, Primitive};
 use std::cmp::min;
 
 mod cli;
@@ -78,6 +80,53 @@ where
     apply2(img1, img2, pixel_difference)
 }
 
+fn stretch<I, P, S>(img: I, border: u32) -> ImageBuffer<P, Vec<S>>
+where
+    I: GenericImageView<Pixel = P>,
+    P: Pixel<Subpixel = S> + 'static,
+    S: Primitive + 'static,
+{
+    let w = img.width();
+    let h = img.height();
+    let mut result = ImageBuffer::new(w + 2 * border - 1, h + 2 * border - 1);
+    replace(&mut result, &img, border, border);
+    let rw = result.width();
+    let rh = result.height();
+    let top = Rect {
+        x: 0,
+        y: border,
+        width: rw,
+        height: 1,
+    };
+    let bottom = Rect {
+        x: 0,
+        y: border + h - 1,
+        width: rw,
+        height: 1,
+    };
+    let left = Rect {
+        x: border,
+        y: 0,
+        width: 1,
+        height: rh,
+    };
+    let right = Rect {
+        x: border + w - 1,
+        y: 0,
+        width: 1,
+        height: rh,
+    };
+    for y in 0..border {
+        result.copy_within(top, 0, y);
+        result.copy_within(bottom, 0, rh - y - 1);
+    }
+    for x in 0..border {
+        result.copy_within(left, x, 0);
+        result.copy_within(right, rw - x - 1, 0);
+    }
+    result
+}
+
 fn main() {
     let brighter = |a, b| a > b;
     let darker = |a, b| a < b;
@@ -92,7 +141,9 @@ fn main() {
             brightest = extreme_around(brightest, offset, &brighter);
             darkest = extreme_around(darkest, offset, &darker);
         }
-        difference(brightest, darkest)
+        let brightest_stretched = stretch(brightest, 2u32.pow(rounds - 1));
+        let darkest_stretched = stretch(darkest, 2u32.pow(rounds - 1));
+        difference(brightest_stretched, darkest_stretched)
             .save(cli::get_out_fname(&f))
             .unwrap();
     }
