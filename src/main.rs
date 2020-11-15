@@ -1,4 +1,4 @@
-use image::{open, GenericImage, GenericImageView, GrayImage, Luma, Pixel};
+use image::{open, GenericImageView, GrayImage, Luma, Pixel};
 use std::cmp::min;
 
 mod cli;
@@ -12,7 +12,7 @@ fn log_2(x: u32) -> u32 {
     num_bits::<u32>() as u32 - x.leading_zeros() - 1
 }
 
-fn brightest<T: GenericImage>(img1: T, img2: T) -> GrayImage {
+fn brightest<T: GenericImageView>(img1: T, img2: T) -> GrayImage {
     GrayImage::from_fn(img1.width(), img1.height(), |x, y| {
         let p1 = img1.get_pixel(x, y);
         let p2 = img2.get_pixel(x, y);
@@ -28,7 +28,7 @@ fn brightest<T: GenericImage>(img1: T, img2: T) -> GrayImage {
 fn main() {
     let args = cli::parse_args();
     for f in args.in_file_path {
-        let mut img = open(&f).unwrap().grayscale().to_luma();
+        let mut img: image::GrayImage = open(&f).unwrap().grayscale().to_luma();
         let smaller_extent = min(img.width(), img.height());
         let rounds = log_2(smaller_extent) - 1;
         for round in 0..rounds {
