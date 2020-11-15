@@ -12,6 +12,20 @@ fn log_2(x: u32) -> u32 {
     num_bits::<u32>() as u32 - x.leading_zeros() - 1
 }
 
+fn apply2<I, P, S, F>(img1: I, img2: I, func: F) -> ImageBuffer<P, Vec<S>>
+where
+    I: GenericImageView<Pixel = P>,
+    P: Pixel<Subpixel = S> + 'static,
+    S: Primitive + 'static,
+    F: Fn(P, P) -> P,
+{
+    ImageBuffer::from_fn(img1.width(), img1.height(), |x, y| {
+        let p1: P = img1.get_pixel(x, y);
+        let p2: P = img2.get_pixel(x, y);
+        func(p1, p2)
+    })
+}
+
 fn extreme<I, P, S, F>(img1: I, img2: I, compare: F) -> ImageBuffer<P, Vec<S>>
 where
     I: GenericImageView<Pixel = P>,
@@ -19,9 +33,7 @@ where
     S: Primitive + 'static,
     F: Fn(S, S) -> bool,
 {
-    ImageBuffer::from_fn(img1.width(), img1.height(), |x, y| {
-        let p1 = img1.get_pixel(x, y);
-        let p2 = img2.get_pixel(x, y);
+    apply2(img1, img2, |p1, p2| {
         match compare(p1.to_luma()[0], p2.to_luma()[0]) {
             true => p1,
             false => p2,
@@ -47,18 +59,23 @@ where
     extreme(top_pixels, bottom_pixels, compare)
 }
 
+fn pixel_difference<P, S>(pixel1: P, pixel2: P) -> P
+where
+    P: Pixel<Subpixel = S> + 'static,
+    S: Primitive + 'static,
+{
+    let mut result = pixel1.clone();
+    result.apply2(&pixel2, &|a, b| a - b);
+    result
+}
+
 fn difference<I, P, S>(img1: I, img2: I) -> ImageBuffer<P, Vec<S>>
 where
     I: GenericImageView<Pixel = P>,
     P: Pixel<Subpixel = S> + 'static,
     S: Primitive + 'static,
 {
-    ImageBuffer::from_fn(img1.width(), img1.height(), |x, y| {
-        let mut p1 = img1.get_pixel(x, y).clone();
-        let p2 = &img2.get_pixel(x, y);
-        p1.apply2(p2, |a, b| a - b);
-        p1
-    })
+    apply2(img1, img2, pixel_difference)
 }
 
 fn main() {
