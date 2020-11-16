@@ -14,7 +14,7 @@ fn log_2(x: u32) -> u32 {
     num_bits::<u32>() as u32 - x.leading_zeros() - 1
 }
 
-fn apply2<I, P, S, F>(img1: I, img2: I, func: F) -> ImageBuffer<P, Vec<S>>
+fn apply2<I, P, S, F>(img1: I, img2: &I, func: F) -> ImageBuffer<P, Vec<S>>
 where
     I: GenericImageView<Pixel = P>,
     P: Pixel<Subpixel = S> + 'static,
@@ -35,7 +35,7 @@ where
     S: Primitive + 'static,
     F: Fn(S, S) -> bool,
 {
-    apply2(img1, img2, |p1, p2| {
+    apply2(img1, &img2, |p1, p2| {
         match compare(p1.to_luma()[0], p2.to_luma()[0]) {
             true => p1,
             false => p2,
@@ -71,7 +71,7 @@ where
     result
 }
 
-fn difference<I, P, S>(img1: I, img2: I) -> ImageBuffer<P, Vec<S>>
+fn difference<I, P, S>(img1: I, img2: &I) -> ImageBuffer<P, Vec<S>>
 where
     I: GenericImageView<Pixel = P>,
     P: Pixel<Subpixel = S> + 'static,
@@ -127,12 +127,31 @@ where
     result
 }
 
+fn equalize<I, P, S>(img: I, brightest: I, darkest: &I) -> ImageBuffer<P, Vec<S>>
+where
+    I: GenericImageView<Pixel = P>,
+    P: Pixel<Subpixel = S> + 'static,
+    S: Primitive + 'static,
+{
+    let range = difference(brightest, darkest);
+    let m = difference(img, darkest);
+    apply2(m, &range, |img_pixel, range_pixel| {
+        let range_value = range_pixel.to_luma()[0].to_f32().unwrap();
+        img_pixel.map_without_alpha(|value: S| {
+            let value_f32 = value.to_f32().unwrap();
+            let new_value_f32 = value_f32 / range_value * 255f32;
+            S::from(new_value_f32).unwrap()
+        })
+    })
+}
+
 fn main() {
     let brighter = |a, b| a > b;
     let darker = |a, b| a < b;
     let args = cli::parse_args();
     for f in args.in_file_path {
-        let mut brightest = open(&f).unwrap().grayscale().to_luma();
+        let img = open(&f).unwrap().grayscale().to_luma();
+        let mut brightest = img.clone();
         let mut darkest = brightest.clone();
         let smaller_extent = min(brightest.width(), brightest.height());
         let rounds = log_2(smaller_extent) - 1;
@@ -143,7 +162,7 @@ fn main() {
         }
         let brightest_stretched = stretch(brightest, 2u32.pow(rounds - 1));
         let darkest_stretched = stretch(darkest, 2u32.pow(rounds - 1));
-        difference(brightest_stretched, darkest_stretched)
+        equalize(img, brightest_stretched, &darkest_stretched)
             .save(cli::get_out_fname(&f))
             .unwrap();
     }
