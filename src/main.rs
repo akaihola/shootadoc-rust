@@ -86,12 +86,10 @@ where
     P: Pixel<Subpixel = S> + 'static,
     S: Primitive + 'static,
 {
-    let w = img.width();
-    let h = img.height();
-    let mut result = ImageBuffer::new(w + 2 * border - 1, h + 2 * border - 1);
+    let (w, h) = img.dimensions();
+    let (rw, rh) = (w + 2 * border - 1, h + 2 * border - 1);
+    let mut result = ImageBuffer::new(rw, rh);
     replace(&mut result, &img, border, border);
-    let rw = result.width();
-    let rh = result.height();
     let top = Rect {
         x: 0,
         y: border,
@@ -153,7 +151,7 @@ fn main() {
         let img = open(&f).unwrap().grayscale().to_luma();
         let mut brightest = img.clone();
         let mut darkest = brightest.clone();
-        let smaller_extent = min(brightest.width(), brightest.height());
+        let smaller_extent = min(img.width(), img.height());
         let rounds = log_2(smaller_extent) - 1;
         for round in 0..rounds {
             let offset = 2u32.pow(round);
