@@ -14,6 +14,9 @@ fn log_2(x: u32) -> u32 {
     num_bits::<u32>() as u32 - x.leading_zeros() - 1
 }
 
+// Timing with this implementation
+// time ( for i in 1 2 3; do target/release/shootadoc-rust /tmp/paper.jpg /tmp/paper.jpg /tmp/paper.jpg; done )
+// 4.54s 4.78s 4.69s 4.61s 4.60s
 fn apply2<I, P, S, F>(img1: I, img2: &I, func: F) -> ImageBuffer<P, Vec<S>>
 where
     I: GenericImageView<Pixel = P>,
