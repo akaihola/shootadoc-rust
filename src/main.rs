@@ -14,6 +14,9 @@ fn log_2(x: u32) -> u32 {
     num_bits::<u32>() as u32 - x.leading_zeros() - 1
 }
 
+// Timing with this implementation
+// time ( for i in 1 2 3; do target/release/shootadoc-rust /tmp/paper.jpg /tmp/paper.jpg /tmp/paper.jpg; done )
+// 4.58s 4.54s 4.58s 4.35s 4.58s
 fn apply2<I, P, S, F>(img1: I, img2: &I, func: F) -> ImageBuffer<P, Vec<S>>
 where
     I: GenericImageView<Pixel = P>,
@@ -21,11 +24,14 @@ where
     S: Primitive + 'static,
     F: Fn(P, P) -> P,
 {
-    ImageBuffer::from_fn(img1.width(), img1.height(), |x, y| {
-        let p1: P = img1.get_pixel(x, y);
-        let p2: P = img2.get_pixel(x, y);
-        func(p1, p2)
-    })
+    let (w, h) = img1.dimensions();
+    let mut buf = ImageBuffer::new(w, h);
+    for y in 0.. h {
+        for x in 0..w {
+            buf.put_pixel(x, y, func(img1.get_pixel(x, y), img2.get_pixel(x, y)))
+        }
+    }
+    buf
 }
 
 fn extreme<I, P, S, F>(img1: I, img2: I, compare: F) -> ImageBuffer<P, Vec<S>>
