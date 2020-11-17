@@ -14,7 +14,7 @@ fn log_2(x: u32) -> u32 {
     num_bits::<u32>() as u32 - x.leading_zeros() - 1
 }
 
-fn apply2<I, P, S, F>(img1: I, img2: &I, func: F) -> ImageBuffer<P, Vec<S>>
+fn map2<I, P, S, F>(img1: I, img2: &I, func: F) -> ImageBuffer<P, Vec<S>>
 where
     I: GenericImageView<Pixel = P>,
     P: Pixel<Subpixel = S> + 'static,
@@ -28,6 +28,18 @@ where
     })
 }
 
+fn apply2<I, P, S, F>(img1: &mut ImageBuffer<P, Vec<S>>, img2: &I, func: F)
+where
+    I: GenericImageView<Pixel = P>,
+    P: Pixel<Subpixel = S> + 'static,
+    S: Primitive + 'static,
+    F: Fn(P, P) -> P,
+{
+    for (x, y, p) in img1.enumerate_pixels_mut() {
+        *p = func(*p, img2.get_pixel(x, y))
+    }
+}
+
 fn extreme<I, P, S, F>(img1: I, img2: I, compare: F) -> ImageBuffer<P, Vec<S>>
 where
     I: GenericImageView<Pixel = P>,
@@ -35,7 +47,7 @@ where
     S: Primitive + 'static,
     F: Fn(S, S) -> bool,
 {
-    apply2(img1, &img2, |p1, p2| {
+    map2(img1, &img2, |p1, p2| {
         match compare(p1.to_luma()[0], p2.to_luma()[0]) {
             true => p1,
             false => p2,
@@ -77,7 +89,7 @@ where
     P: Pixel<Subpixel = S> + 'static,
     S: Primitive + 'static,
 {
-    apply2(img1, img2, pixel_difference)
+    map2(img1, img2, pixel_difference)
 }
 
 fn stretch<I, P, S>(img: I, border: u32) -> ImageBuffer<P, Vec<S>>
@@ -131,16 +143,17 @@ where
     P: Pixel<Subpixel = S> + 'static,
     S: Primitive + 'static,
 {
-    let range = difference(brightest, darkest);
-    let m = difference(img, darkest);
-    apply2(m, &range, |img_pixel, range_pixel| {
+    let color_range = difference(brightest, darkest);
+    let mut result = difference(img, darkest);
+    apply2(&mut result, &color_range, |img_pixel, range_pixel| {
         let range_value = range_pixel.to_luma()[0].to_f32().unwrap();
         img_pixel.map_without_alpha(|value: S| {
             let value_f32 = value.to_f32().unwrap();
             let new_value_f32 = value_f32 / range_value * 255f32;
             S::from(new_value_f32).unwrap()
         })
-    })
+    });
+    result
 }
 
 fn main() {
