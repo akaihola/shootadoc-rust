@@ -83,15 +83,6 @@ where
     result
 }
 
-fn difference<I, P, S>(img1: I, img2: &I) -> ImageBuffer<P, Vec<S>>
-where
-    I: GenericImageView<Pixel = P>,
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-{
-    map2(img1, img2, pixel_difference)
-}
-
 fn subtract<I, P, S>(img1: &mut ImageBuffer<P, Vec<S>>, img2: &I)
 where
     I: GenericImageView<Pixel = P>,
@@ -146,14 +137,12 @@ where
     result
 }
 
-fn equalize<I, P, S>(img: &mut ImageBuffer<P, Vec<S>>, brightest: I, darkest: &I)
+fn equalize<I, P, S>(img: &mut ImageBuffer<P, Vec<S>>, color_range: I)
 where
     I: GenericImageView<Pixel = P>,
     P: Pixel<Subpixel = S> + 'static,
     S: Primitive + 'static,
 {
-    let color_range = difference(brightest, darkest);
-    subtract(img, darkest);
     apply2(img, &color_range, |img_pixel, range_pixel| {
         let range_value = range_pixel.to_luma()[0].to_f32().unwrap();
         img_pixel.map_without_alpha(|value: S| {
@@ -179,9 +168,11 @@ fn main() {
             brightest = extreme_around(brightest, offset, &brighter);
             darkest = extreme_around(darkest, offset, &darker);
         }
-        let brightest_stretched = stretch(brightest, 2u32.pow(rounds - 1));
         let darkest_stretched = stretch(darkest, 2u32.pow(rounds - 1));
-        equalize(&mut img, brightest_stretched, &darkest_stretched);
+        let mut color_range = stretch(brightest, 2u32.pow(rounds - 1));
+        subtract(&mut color_range, &darkest_stretched);
+        subtract(&mut img, &darkest_stretched);
+        equalize(&mut img, color_range);
         img.save(cli::get_out_fname(&f)).unwrap();
     }
 }
