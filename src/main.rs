@@ -92,6 +92,15 @@ where
     map2(img1, img2, pixel_difference)
 }
 
+fn subtract<I, P, S>(img1: &mut ImageBuffer<P, Vec<S>>, img2: &I)
+where
+    I: GenericImageView<Pixel = P>,
+    P: Pixel<Subpixel = S> + 'static,
+    S: Primitive + 'static,
+{
+    apply2(img1, img2, pixel_difference)
+}
+
 fn stretch<I, P, S>(img: I, border: u32) -> ImageBuffer<P, Vec<S>>
 where
     I: GenericImageView<Pixel = P>,
@@ -137,23 +146,22 @@ where
     result
 }
 
-fn equalize<I, P, S>(img: I, brightest: I, darkest: &I) -> ImageBuffer<P, Vec<S>>
+fn equalize<I, P, S>(img: &mut ImageBuffer<P, Vec<S>>, brightest: I, darkest: &I)
 where
     I: GenericImageView<Pixel = P>,
     P: Pixel<Subpixel = S> + 'static,
     S: Primitive + 'static,
 {
     let color_range = difference(brightest, darkest);
-    let mut result = difference(img, darkest);
-    apply2(&mut result, &color_range, |img_pixel, range_pixel| {
+    subtract(img, darkest);
+    apply2(img, &color_range, |img_pixel, range_pixel| {
         let range_value = range_pixel.to_luma()[0].to_f32().unwrap();
         img_pixel.map_without_alpha(|value: S| {
             let value_f32 = value.to_f32().unwrap();
             let new_value_f32 = value_f32 / range_value * 255f32;
             S::from(new_value_f32).unwrap()
         })
-    });
-    result
+    })
 }
 
 fn main() {
@@ -161,7 +169,7 @@ fn main() {
     let darker = |a, b| a < b;
     let args = cli::parse_args();
     for f in args.in_file_path {
-        let img = open(&f).unwrap().grayscale().to_luma();
+        let mut img = open(&f).unwrap().grayscale().to_luma();
         let mut brightest = img.clone();
         let mut darkest = brightest.clone();
         let smaller_extent = min(img.width(), img.height());
@@ -173,8 +181,7 @@ fn main() {
         }
         let brightest_stretched = stretch(brightest, 2u32.pow(rounds - 1));
         let darkest_stretched = stretch(darkest, 2u32.pow(rounds - 1));
-        equalize(img, brightest_stretched, &darkest_stretched)
-            .save(cli::get_out_fname(&f))
-            .unwrap();
+        equalize(&mut img, brightest_stretched, &darkest_stretched);
+        img.save(cli::get_out_fname(&f)).unwrap();
     }
 }
