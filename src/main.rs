@@ -25,46 +25,39 @@ where
     }
 }
 
-fn apply_with_offset<P, S, F>(img: &mut ImageBuffer<P, Vec<S>>, dx: u32, dy: u32, func: F)
+fn apply_with_offset<P, S, F>(img: &mut ImageBuffer<P, Vec<S>>, offset: u32, func: F)
 where
     P: Pixel<Subpixel = S> + 'static,
     S: Primitive + 'static,
-    F: Fn(P, P) -> P,
+    F: Fn(P, P, P, P) -> P,
 {
     let (width, height) = img.dimensions();
-    for y in 0..height - dy {
-        for x in 0..width - dx {
+    for y in 0..height - offset {
+        for x in 0..width - offset {
             img.put_pixel(
                 x,
                 y,
-                func(*img.get_pixel(x, y), *img.get_pixel(x + dx, y + dy)),
+                func(
+                    *img.get_pixel(x, y),
+                    *img.get_pixel(x + offset, y),
+                    *img.get_pixel(x, y + offset),
+                    *img.get_pixel(x + offset, y + offset),
+                ),
             )
         }
     }
 }
 
-fn extreme<P, S, F>(img: &mut ImageBuffer<P, Vec<S>>, dx: u32, dy: u32, compare: F)
+fn extreme_around<P, S>(img: &mut ImageBuffer<P, Vec<S>>, offset: u32, pick_nth: usize)
 where
     P: Pixel<Subpixel = S> + 'static,
     S: Primitive + 'static,
-    F: Fn(S, S) -> bool,
 {
-    apply_with_offset(img, dx, dy, |p1, p2| {
-        match compare(p1.to_luma()[0], p2.to_luma()[0]) {
-            true => p1,
-            false => p2,
-        }
+    apply_with_offset(img, offset, |p1, p2, p3, p4| {
+        let mut pixels = vec![p1, p2, p3, p4];
+        pixels.sort_by(|a, b| a.to_luma()[0].partial_cmp(&b.to_luma()[0]).unwrap());
+        pixels[pick_nth]
     })
-}
-
-fn extreme_around<P, S, F>(img: &mut ImageBuffer<P, Vec<S>>, offset: u32, compare: &F)
-where
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-    F: Fn(S, S) -> bool,
-{
-    extreme(img, offset, 0, compare);
-    extreme(img, 0, offset, compare);
 }
 
 fn pixel_difference<P, S>(pixel1: P, pixel2: P) -> P
@@ -73,7 +66,10 @@ where
     S: Primitive + 'static,
 {
     let mut result = pixel1.clone();
-    result.apply2(&pixel2, &|a, b| match b > a { true => a - a, false => a - b} );
+    result.apply2(&pixel2, &|a, b| match b > a {
+        true => a - a,
+        false => a - b,
+    });
     result
 }
 
@@ -157,8 +153,8 @@ fn save_debug_image(img: &GrayImage, name: String, debug_mode: bool) -> () {
 }
 
 fn main() {
-    let brighter = |a, b| a > b;
-    let darker = |a, b| a < b;
+    let brighter = 2; // 3rd (the second brightest) out of 2x2 brightness-sorted pixels
+    let darker = 0; // 1st (the darkest) of brightness-sorted 2x2 pixels
     let args = cli::parse_args();
     for f in args.in_file_path {
         let mut img = open(&f).unwrap().grayscale().to_luma();
@@ -170,13 +166,13 @@ fn main() {
         let border = 2u32.pow(rounds - 1);
         for round in 0..rounds {
             let offset = 2u32.pow(round);
-            extreme_around(&mut color_range, offset, &brighter);
+            extreme_around(&mut color_range, offset, brighter);
             save_debug_image(
                 &color_range,
                 format!("brightest.{}.png", offset),
                 args.debug,
             );
-            extreme_around(&mut darkest, offset, &darker);
+            extreme_around(&mut darkest, offset, darker);
             save_debug_image(&darkest, format!("darkest.{}.png", offset), args.debug);
         }
         stretch(&mut darkest, border);
