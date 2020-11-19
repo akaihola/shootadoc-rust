@@ -73,7 +73,7 @@ where
     S: Primitive + 'static,
 {
     let mut result = pixel1.clone();
-    result.apply2(&pixel2, &|a, b| a - b);
+    result.apply2(&pixel2, &|a, b| match b > a { true => a - a, false => a - b} );
     result
 }
 
@@ -144,7 +144,7 @@ where
         let range_value = range_pixel.to_luma()[0].to_f32().unwrap();
         img_pixel.map_without_alpha(|value: S| {
             let value_f32 = value.to_f32().unwrap();
-            let new_value_f32 = value_f32 / range_value * 255f32;
+            let new_value_f32 = 255f32.min(value_f32 / range_value * 255f32);
             S::from(new_value_f32).unwrap()
         })
     })
