@@ -42,11 +42,9 @@ fn extreme<F>(img: &mut GrayImage, dx: u32, dy: u32, compare: F)
 where
     F: Fn(u8, u8) -> bool,
 {
-    apply_with_offset(img, dx, dy, |p1, p2| {
-        match compare(p1[0], p2[0]) {
-            true => p1,
-            false => p2,
-        }
+    apply_with_offset(img, dx, dy, |p1, p2| match compare(p1[0], p2[0]) {
+        true => p1,
+        false => p2,
     })
 }
 
@@ -115,8 +113,7 @@ fn stretch(img: &mut GrayImage, border: u32) {
 fn equalize(img: &mut GrayImage, color_range: GrayImage) {
     apply2(img, &color_range, |img_pixel, range_pixel| {
         let range_value = range_pixel[0] as f32;
-        img_pixel
-            .map_without_alpha(|value: u8| 255f32.min(value as f32 / range_value * 255f32) as u8)
+        img_pixel.map_without_alpha(|value: u8| (value as f32 / range_value * 255f32) as u8)
     })
 }
 
