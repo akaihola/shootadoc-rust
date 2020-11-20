@@ -4,15 +4,6 @@ use std::cmp::min;
 
 mod cli;
 
-const fn num_bits<T>() -> usize {
-    std::mem::size_of::<T>() * 8
-}
-
-fn log_2(x: u32) -> u32 {
-    assert!(x > 0);
-    num_bits::<u32>() as u32 - x.leading_zeros() - 1
-}
-
 fn apply2<F>(img1: &mut GrayImage, img2: &GrayImage, func: F)
 where
     F: Fn(Luma<u8>, Luma<u8>) -> Luma<u8>,
@@ -24,7 +15,17 @@ where
 
 fn apply_with_offset<F>(img: &mut GrayImage, offset: u32, func: F)
 where
-    F: Fn(Luma<u8>, Luma<u8>, Luma<u8>, Luma<u8>) -> Luma<u8>,
+    F: Fn(
+        Luma<u8>,
+        Luma<u8>,
+        Luma<u8>,
+        Luma<u8>,
+        Luma<u8>,
+        Luma<u8>,
+        Luma<u8>,
+        Luma<u8>,
+        Luma<u8>,
+    ) -> Luma<u8>,
 {
     let (width, height) = img.dimensions();
     for y in 0..height - offset {
@@ -34,9 +35,14 @@ where
                 y,
                 func(
                     *img.get_pixel(x, y),
-                    *img.get_pixel(x + offset, y),
-                    *img.get_pixel(x, y + offset),
-                    *img.get_pixel(x + offset, y + offset),
+                    *img.get_pixel(x + offset / 3, y),
+                    *img.get_pixel(x + 2 * offset / 3, y),
+                    *img.get_pixel(x, y + offset / 3),
+                    *img.get_pixel(x + offset / 3, y + offset / 3),
+                    *img.get_pixel(x + 2 * offset / 3, y + offset / 3),
+                    *img.get_pixel(x, y + 2 * offset / 3),
+                    *img.get_pixel(x + offset / 3, y + 2 * offset / 3),
+                    *img.get_pixel(x + 2 * offset / 3, y + 2 * offset / 3),
                 ),
             )
         }
@@ -47,8 +53,16 @@ fn extreme_around(img: &mut GrayImage, offset: u32, pick_nth: usize) {
     apply_with_offset(
         img,
         offset,
-        |p1: Luma<u8>, p2: Luma<u8>, p3: Luma<u8>, p4: Luma<u8>| {
-            let mut pixels = vec![p1, p2, p3, p4];
+        |p11: Luma<u8>,
+         p12: Luma<u8>,
+         p13: Luma<u8>,
+         p21: Luma<u8>,
+         p22: Luma<u8>,
+         p23: Luma<u8>,
+         p31: Luma<u8>,
+         p32: Luma<u8>,
+         p33: Luma<u8>| {
+            let mut pixels = vec![p11, p12, p13, p21, p22, p23, p31, p32, p33];
             pixels.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap());
             pixels[pick_nth]
         },
@@ -123,8 +137,8 @@ fn save_debug_image(img: &GrayImage, name: String, debug_mode: bool) -> () {
 }
 
 fn main() {
-    let brighter = 2; // 3rd (the second brightest) out of 2x2 brightness-sorted pixels
-    let darker = 0; // 1st (the darkest) of brightness-sorted 2x2 pixels
+    let brighter = 6;
+    let darker = 0;
     let args = cli::parse_args();
     for f in args.in_file_path {
         let mut img: GrayImage = open(&f).unwrap().grayscale().to_luma();
@@ -132,10 +146,10 @@ fn main() {
         let mut color_range = img.clone();
         let mut darkest = color_range.clone();
         let smaller_extent = min(img.width(), img.height());
-        let rounds = log_2(smaller_extent) - 1;
-        let border = 2u32.pow(rounds - 1);
+        let rounds = (smaller_extent as f32).log(3.0) as u32;
+        let border = 3u32.pow(rounds - 1);
         for round in 0..rounds {
-            let offset = 2u32.pow(round);
+            let offset = 3u32.pow(round);
             extreme_around(&mut color_range, offset, brighter);
             save_debug_image(
                 &color_range,
@@ -148,13 +162,13 @@ fn main() {
         stretch(&mut darkest, border);
         save_debug_image(
             &darkest,
-            format!("darkest.stretched.{}.png", 2u32.pow(rounds - 1)),
+            format!("darkest.stretched.{}.png", border),
             args.debug,
         );
         stretch(&mut color_range, border);
         save_debug_image(
             &color_range,
-            format!("brightest.stretched.{}.png", 2u32.pow(rounds - 1)),
+            format!("brightest.stretched.{}.png", border),
             args.debug,
         );
         subtract(&mut color_range, &darkest);
