@@ -1,5 +1,5 @@
 use image::math::Rect;
-use image::{open, GenericImage, GenericImageView, GrayImage, ImageBuffer, Pixel, Primitive};
+use image::{open, GenericImage, GenericImageView, GrayImage, ImageBuffer, Luma, Pixel, Primitive};
 use std::cmp::min;
 
 mod cli;
@@ -153,14 +153,25 @@ fn save_debug_image(img: &GrayImage, name: String, debug_mode: bool) -> () {
     }
 }
 
+fn blur(img: &mut GrayImage) {
+    apply_with_offset(img, 1, |a, b, c, d| {
+        Luma([((a.to_luma()[0] as u32
+            + b.to_luma()[0] as u32
+            + c.to_luma()[0] as u32
+            + d.to_luma()[0] as u32)
+            / 4) as u8])
+    })
+}
+
 fn main() {
-    let brighter = (2, 3);
-    let darker = (1, 0);
+    let brighter = (3, 3);
+    let darker = (0, 0);
     let args = cli::parse_args();
     for f in args.in_file_path {
         let mut img = open(&f).unwrap().grayscale().to_luma();
         save_debug_image(&img, format!("darkest.0.png"), args.debug);
         let mut color_range = img.clone();
+        blur(&mut color_range);
         let mut darkest = color_range.clone();
         let smaller_extent = min(img.width(), img.height());
         let rounds = log_2(smaller_extent) - 1;
