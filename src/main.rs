@@ -1,5 +1,5 @@
 use image::math::Rect;
-use image::{open, GenericImage, GenericImageView, GrayImage, ImageBuffer, Pixel, Primitive};
+use image::{open, GenericImage, GrayImage, Luma, Pixel};
 use std::cmp::min;
 
 mod cli;
@@ -13,23 +13,18 @@ fn log_2(x: u32) -> u32 {
     num_bits::<u32>() as u32 - x.leading_zeros() - 1
 }
 
-fn apply2<I, P, S, F>(img1: &mut ImageBuffer<P, Vec<S>>, img2: &I, func: F)
+fn apply2<F>(img1: &mut GrayImage, img2: &GrayImage, func: F)
 where
-    I: GenericImageView<Pixel = P>,
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-    F: Fn(P, P) -> P,
+    F: Fn(Luma<u8>, Luma<u8>) -> Luma<u8>,
 {
     for (x, y, p) in img1.enumerate_pixels_mut() {
-        *p = func(*p, img2.get_pixel(x, y))
+        *p = func(*p, *img2.get_pixel(x, y))
     }
 }
 
-fn apply_with_offset<P, S, F>(img: &mut ImageBuffer<P, Vec<S>>, dx: u32, dy: u32, func: F)
+fn apply_with_offset<F>(img: &mut GrayImage, dx: u32, dy: u32, func: F)
 where
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-    F: Fn(P, P) -> P,
+    F: Fn(Luma<u8>, Luma<u8>) -> Luma<u8>,
 {
     let (width, height) = img.dimensions();
     for y in 0..height - dy {
@@ -43,54 +38,37 @@ where
     }
 }
 
-fn extreme<P, S, F>(img: &mut ImageBuffer<P, Vec<S>>, dx: u32, dy: u32, compare: F)
+fn extreme<F>(img: &mut GrayImage, dx: u32, dy: u32, compare: F)
 where
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-    F: Fn(S, S) -> bool,
+    F: Fn(u8, u8) -> bool,
 {
     apply_with_offset(img, dx, dy, |p1, p2| {
-        match compare(p1.to_luma()[0], p2.to_luma()[0]) {
+        match compare(p1[0], p2[0]) {
             true => p1,
             false => p2,
         }
     })
 }
 
-fn extreme_around<P, S, F>(img: &mut ImageBuffer<P, Vec<S>>, offset: u32, compare: &F)
+fn extreme_around<F>(img: &mut GrayImage, offset: u32, compare: &F)
 where
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-    F: Fn(S, S) -> bool,
+    F: Fn(u8, u8) -> bool,
 {
     extreme(img, offset, 0, compare);
     extreme(img, 0, offset, compare);
 }
 
-fn pixel_difference<P, S>(pixel1: P, pixel2: P) -> P
-where
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-{
+fn pixel_difference(pixel1: Luma<u8>, pixel2: Luma<u8>) -> Luma<u8> {
     let mut result = pixel1.clone();
-    result.apply2(&pixel2, &|a, b| a - b);
+    result.apply2(&pixel2, &|a: u8, b: u8| a.saturating_sub(b));
     result
 }
 
-fn subtract<I, P, S>(img1: &mut ImageBuffer<P, Vec<S>>, img2: &I)
-where
-    I: GenericImageView<Pixel = P>,
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-{
+fn subtract(img1: &mut GrayImage, img2: &GrayImage) {
     apply2(img1, img2, pixel_difference)
 }
 
-fn stretch<P, S>(img: &mut ImageBuffer<P, Vec<S>>, border: u32)
-where
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-{
+fn stretch(img: &mut GrayImage, border: u32) {
     let (width, height) = img.dimensions();
     let (area_width, area_height) = (width - 2 * border, height - 2 * border);
     let area = Rect {
@@ -134,19 +112,11 @@ where
     }
 }
 
-fn equalize<I, P, S>(img: &mut ImageBuffer<P, Vec<S>>, color_range: I)
-where
-    I: GenericImageView<Pixel = P>,
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-{
+fn equalize(img: &mut GrayImage, color_range: GrayImage) {
     apply2(img, &color_range, |img_pixel, range_pixel| {
-        let range_value = range_pixel.to_luma()[0].to_f32().unwrap();
-        img_pixel.map_without_alpha(|value: S| {
-            let value_f32 = value.to_f32().unwrap();
-            let new_value_f32 = value_f32 / range_value * 255f32;
-            S::from(new_value_f32).unwrap()
-        })
+        let range_value = range_pixel[0] as f32;
+        img_pixel
+            .map_without_alpha(|value: u8| 255f32.min(value as f32 / range_value * 255f32) as u8)
     })
 }
 
@@ -161,7 +131,7 @@ fn main() {
     let darker = |a, b| a < b;
     let args = cli::parse_args();
     for f in args.in_file_path {
-        let mut img = open(&f).unwrap().grayscale().to_luma();
+        let mut img: GrayImage = open(&f).unwrap().grayscale().to_luma();
         save_debug_image(&img, format!("darkest.0.png"), args.debug);
         let mut color_range = img.clone();
         let mut darkest = color_range.clone();
