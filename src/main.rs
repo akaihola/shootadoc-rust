@@ -13,14 +13,15 @@ where
     }
 }
 
-fn apply_with_offset<F>(img: &mut GrayImage, offset: u32, func: F)
+fn apply_with_offset<F>(img: GrayImage, offset: u32, func: F) -> GrayImage
 where
     F: Fn(Vec<u8>) -> u8,
 {
     let (width, height) = img.dimensions();
+    let mut result = GrayImage::new(width, height);
     for y in 0..height - offset {
         for x in 0..width - offset {
-            img.put_pixel(
+            result.put_pixel(
                 x,
                 y,
                 Luma([func(vec![
@@ -37,9 +38,10 @@ where
             )
         }
     }
+    result
 }
 
-fn extreme_around(img: &mut GrayImage, offset: u32, pick_nth: usize) {
+fn extreme_around(img: GrayImage, offset: u32, pick_nth: usize) -> GrayImage {
     apply_with_offset(img, offset, |pixels: Vec<u8>| {
         let mut sorted = pixels.clone();
         sorted.sort_unstable();
@@ -122,13 +124,13 @@ fn main() {
         let border = 3u32.pow(rounds - 1);
         for round in 0..rounds {
             let offset = 3u32.pow(round);
-            extreme_around(&mut color_range, offset, brighter);
+            color_range = extreme_around(color_range, offset, brighter);
             save_debug_image(
                 &color_range,
                 format!("brightest.{}.png", offset),
                 args.debug,
             );
-            extreme_around(&mut darkest, offset, darker);
+            darkest = extreme_around(darkest, offset, darker);
             save_debug_image(&darkest, format!("darkest.{}.png", offset), args.debug);
         }
         stretch(&mut darkest, border);
