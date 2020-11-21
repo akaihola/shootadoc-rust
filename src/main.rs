@@ -48,7 +48,7 @@ where
     }
 }
 
-fn extreme_around<P, S>(img: &mut ImageBuffer<P, Vec<S>>, offset: u32, pick_nth: usize)
+fn extreme_around<P, S>(img: &mut ImageBuffer<P, Vec<S>>, offset: u32, pick_nth: (usize, usize))
 where
     P: Pixel<Subpixel = S> + 'static,
     S: Primitive + 'static,
@@ -56,7 +56,8 @@ where
     apply_with_offset(img, offset, |p1, p2, p3, p4| {
         let mut pixels = vec![p1, p2, p3, p4];
         pixels.sort_by(|a, b| a.to_luma()[0].partial_cmp(&b.to_luma()[0]).unwrap());
-        pixels[pick_nth]
+        let nth = if offset == 1 { pick_nth.0 } else { pick_nth.1 };
+        pixels[nth]
     })
 }
 
@@ -153,8 +154,8 @@ fn save_debug_image(img: &GrayImage, name: String, debug_mode: bool) -> () {
 }
 
 fn main() {
-    let brighter = 2; // 3rd (the second brightest) out of 2x2 brightness-sorted pixels
-    let darker = 0; // 1st (the darkest) of brightness-sorted 2x2 pixels
+    let brighter = (2, 3);
+    let darker = (1, 0);
     let args = cli::parse_args();
     for f in args.in_file_path {
         let mut img = open(&f).unwrap().grayscale().to_luma();
