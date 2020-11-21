@@ -1,31 +1,21 @@
 use image::math::Rect;
-use image::{open, GenericImage, GrayImage, Luma, Pixel};
+use image::{open, GenericImage, GrayImage, Luma};
 use std::cmp::min;
 
 mod cli;
 
 fn apply2<F>(img1: &mut GrayImage, img2: &GrayImage, func: F)
 where
-    F: Fn(Luma<u8>, Luma<u8>) -> Luma<u8>,
+    F: Fn(u8, u8) -> u8,
 {
     for (x, y, p) in img1.enumerate_pixels_mut() {
-        *p = func(*p, *img2.get_pixel(x, y))
+        *p = Luma([func(p[0], img2.get_pixel(x, y)[0])])
     }
 }
 
 fn apply_with_offset<F>(img: &mut GrayImage, offset: u32, func: F)
 where
-    F: Fn(
-        Luma<u8>,
-        Luma<u8>,
-        Luma<u8>,
-        Luma<u8>,
-        Luma<u8>,
-        Luma<u8>,
-        Luma<u8>,
-        Luma<u8>,
-        Luma<u8>,
-    ) -> Luma<u8>,
+    F: Fn(Vec<u8>) -> u8,
 {
     let (width, height) = img.dimensions();
     for y in 0..height - offset {
@@ -33,50 +23,32 @@ where
             img.put_pixel(
                 x,
                 y,
-                func(
-                    *img.get_pixel(x, y),
-                    *img.get_pixel(x + offset / 3, y),
-                    *img.get_pixel(x + 2 * offset / 3, y),
-                    *img.get_pixel(x, y + offset / 3),
-                    *img.get_pixel(x + offset / 3, y + offset / 3),
-                    *img.get_pixel(x + 2 * offset / 3, y + offset / 3),
-                    *img.get_pixel(x, y + 2 * offset / 3),
-                    *img.get_pixel(x + offset / 3, y + 2 * offset / 3),
-                    *img.get_pixel(x + 2 * offset / 3, y + 2 * offset / 3),
-                ),
+                Luma([func(vec![
+                    img.get_pixel(x, y)[0],
+                    img.get_pixel(x + offset / 3, y)[0],
+                    img.get_pixel(x + 2 * offset / 3, y)[0],
+                    img.get_pixel(x, y + offset / 3)[0],
+                    img.get_pixel(x + offset / 3, y + offset / 3)[0],
+                    img.get_pixel(x + 2 * offset / 3, y + offset / 3)[0],
+                    img.get_pixel(x, y + 2 * offset / 3)[0],
+                    img.get_pixel(x + offset / 3, y + 2 * offset / 3)[0],
+                    img.get_pixel(x + 2 * offset / 3, y + 2 * offset / 3)[0],
+                ])]),
             )
         }
     }
 }
 
 fn extreme_around(img: &mut GrayImage, offset: u32, pick_nth: usize) {
-    apply_with_offset(
-        img,
-        offset,
-        |p11: Luma<u8>,
-         p12: Luma<u8>,
-         p13: Luma<u8>,
-         p21: Luma<u8>,
-         p22: Luma<u8>,
-         p23: Luma<u8>,
-         p31: Luma<u8>,
-         p32: Luma<u8>,
-         p33: Luma<u8>| {
-            let mut pixels = vec![p11, p12, p13, p21, p22, p23, p31, p32, p33];
-            pixels.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap());
-            pixels[pick_nth]
-        },
-    )
-}
-
-fn pixel_difference(pixel1: Luma<u8>, pixel2: Luma<u8>) -> Luma<u8> {
-    let mut result = pixel1.clone();
-    result.apply2(&pixel2, &|a: u8, b: u8| a.saturating_sub(b));
-    result
+    apply_with_offset(img, offset, |pixels: Vec<u8>| {
+        let mut sorted = pixels.clone();
+        sorted.sort_unstable();
+        sorted[pick_nth]
+    })
 }
 
 fn subtract(img1: &mut GrayImage, img2: &GrayImage) {
-    apply2(img1, img2, pixel_difference)
+    apply2(img1, img2, |a, b| a.saturating_sub(b))
 }
 
 fn stretch(img: &mut GrayImage, border: u32) {
@@ -125,8 +97,8 @@ fn stretch(img: &mut GrayImage, border: u32) {
 
 fn equalize(img: &mut GrayImage, color_range: GrayImage) {
     apply2(img, &color_range, |img_pixel, range_pixel| {
-        let range_value = range_pixel[0] as f32;
-        img_pixel.map_without_alpha(|value: u8| (value as f32 / range_value * 255f32) as u8)
+        let range_value = range_pixel as f32;
+        (img_pixel as f32 / range_value * 255f32) as u8
     })
 }
 
