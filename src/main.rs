@@ -1,5 +1,4 @@
-use image::math::Rect;
-use image::{open, GenericImage, GrayImage, Luma};
+use image::{open, GrayImage, Luma};
 use std::cmp::min;
 
 mod cli;
@@ -19,82 +18,71 @@ where
 {
     let (width, height) = img.dimensions();
     let mut result = GrayImage::new(width, height);
-    for y in 0..height - offset {
-        for x in 0..width - offset {
-            result.put_pixel(
-                x,
-                y,
-                Luma([func(vec![
-                    img.get_pixel(x, y)[0],
-                    img.get_pixel(x + offset / 3, y)[0],
-                    img.get_pixel(x + 2 * offset / 3, y)[0],
-                    img.get_pixel(x, y + offset / 3)[0],
-                    img.get_pixel(x + offset / 3, y + offset / 3)[0],
-                    img.get_pixel(x + 2 * offset / 3, y + offset / 3)[0],
-                    img.get_pixel(x, y + 2 * offset / 3)[0],
-                    img.get_pixel(x + offset / 3, y + 2 * offset / 3)[0],
-                    img.get_pixel(x + 2 * offset / 3, y + 2 * offset / 3)[0],
-                ])]),
-            )
+    let next = (offset as i32) / 3;
+    for y in 0..height as i32 {
+        for x in 0..width as i32 {
+            let (x1, x2, x3) = (x - next, x, x + next);
+            let (y1, y2, y3) = (y - next, y, y + next);
+            let area = if y1 < 0 {
+                if x1 < 0 {
+                    vec![(x2, y2), (x3, y2), (x2, y3), (x3, y3)]
+                } else if x3 < width as i32 {
+                    vec![(x1, y2), (x2, y2), (x3, y2), (x1, y3), (x2, y3), (x3, y3)]
+                } else {
+                    vec![(x1, y2), (x2, y2), (x1, y3), (x2, y3)]
+                }
+            } else if y3 < height as i32 {
+                if x1 < 0 {
+                    vec![(x2, y1), (x3, y1), (x2, y2), (x3, y2), (x2, y3), (x3, y3)]
+                } else if x3 < width as i32 {
+                    vec![
+                        (x1, y1),
+                        (x2, y1),
+                        (x3, y1),
+                        (x1, y2),
+                        (x2, y2),
+                        (x3, y2),
+                        (x1, y3),
+                        (x2, y3),
+                        (x3, y3),
+                    ]
+                } else {
+                    vec![(x1, y1), (x2, y1), (x1, y2), (x2, y2), (x1, y3), (x2, y3)]
+                }
+            } else {
+                if x1 < 0 {
+                    vec![(x2, y1), (x3, y1), (x2, y2), (x3, y2)]
+                } else if x3 < width as i32 {
+                    vec![(x1, y1), (x2, y1), (x3, y1), (x1, y2), (x2, y2), (x3, y2)]
+                } else {
+                    vec![(x1, y1), (x2, y1), (x1, y2), (x2, y2)]
+                }
+            };
+            let pixels: Vec<u8> = area
+                .iter()
+                .map(|(ax, ay)| img.get_pixel(*ax as u32, *ay as u32)[0])
+                .collect();
+            result.put_pixel(x as u32, y as u32, Luma([func(pixels)]))
         }
     }
     result
 }
 
-fn extreme_around(img: GrayImage, offset: u32, pick_nth: usize) -> GrayImage {
+fn extreme_around(img: GrayImage, offset: u32, pick_nth: i8) -> GrayImage {
     apply_with_offset(img, offset, |pixels: Vec<u8>| {
         let mut sorted = pixels.clone();
         sorted.sort_unstable();
-        sorted[pick_nth]
+        let len = sorted.len();
+        if pick_nth >= 0 {
+            sorted[len * (pick_nth as usize) / 9]
+        } else {
+            sorted[len - len * (-pick_nth - 1) as usize / 9 - 1]
+        }
     })
 }
 
 fn subtract(img1: &mut GrayImage, img2: &GrayImage) {
     apply2(img1, img2, |a, b| a.saturating_sub(b))
-}
-
-fn stretch(img: &mut GrayImage, border: u32) {
-    let (width, height) = img.dimensions();
-    let (area_width, area_height) = (width - 2 * border, height - 2 * border);
-    let area = Rect {
-        x: 0,
-        y: 0,
-        width: area_width,
-        height: area_height,
-    };
-    img.copy_within(area, border, border);
-    let top = Rect {
-        x: 0,
-        y: border,
-        width,
-        height: 1,
-    };
-    let bottom = Rect {
-        x: 0,
-        y: border + area_height - 1,
-        width,
-        height: 1,
-    };
-    let left = Rect {
-        x: border,
-        y: 0,
-        width: 1,
-        height,
-    };
-    let right = Rect {
-        x: border + area_width - 1,
-        y: 0,
-        width: 1,
-        height,
-    };
-    for y in 0..border {
-        img.copy_within(top, 0, y);
-        img.copy_within(bottom, 0, height - y - 1);
-    }
-    for x in 0..border {
-        img.copy_within(left, x, 0);
-        img.copy_within(right, width - x - 1, 0);
-    }
 }
 
 fn equalize(img: &mut GrayImage, color_range: GrayImage) {
@@ -111,7 +99,7 @@ fn save_debug_image(img: &GrayImage, name: String, debug_mode: bool) -> () {
 }
 
 fn main() {
-    let brighter = 6;
+    let brighter = -2;
     let darker = 0;
     let args = cli::parse_args();
     for f in args.in_file_path {
@@ -121,8 +109,8 @@ fn main() {
         let mut darkest = color_range.clone();
         let smaller_extent = min(img.width(), img.height());
         let rounds = (smaller_extent as f32).log(3.0) as u32;
-        let border = 3u32.pow(rounds - 1);
-        for round in 0..rounds {
+        let border = 3u32.pow(rounds);
+        for round in 0..rounds + 1 {
             let offset = 3u32.pow(round);
             color_range = extreme_around(color_range, offset, brighter);
             save_debug_image(
@@ -133,13 +121,11 @@ fn main() {
             darkest = extreme_around(darkest, offset, darker);
             save_debug_image(&darkest, format!("darkest.{}.png", offset), args.debug);
         }
-        stretch(&mut darkest, border);
         save_debug_image(
             &darkest,
             format!("darkest.stretched.{}.png", border),
             args.debug,
         );
-        stretch(&mut color_range, border);
         save_debug_image(
             &color_range,
             format!("brightest.stretched.{}.png", border),
