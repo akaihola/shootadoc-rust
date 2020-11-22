@@ -12,23 +12,18 @@ fn log_2(x: u32) -> u32 {
     num_bits::<u32>() as u32 - x.leading_zeros() - 1
 }
 
-fn apply2<F>(img1: &mut GrayImage, img2: &GrayImage, func: F)
+fn apply2<F>(img1: &mut GrayImage, img2: &GrayImage, func: &mut F)
 where
-    F: Fn(u8, u8) -> u8,
+    F: FnMut(u8, u8) -> u8,
 {
     for (x, y, p) in img1.enumerate_pixels_mut() {
         *p = Luma([func(p[0], img2.get_pixel(x, y)[0])])
     }
 }
 
-fn apply_with_offset<F>(
-    img: &mut GrayImage,
-    dx: u32,
-    dy: u32,
-    func: F,
-    frequencies: &mut [u32; 256],
-) where
-    F: Fn(u8, u8) -> u8,
+fn apply_with_offset<F>(img: &mut GrayImage, dx: u32, dy: u32, func: &mut F)
+where
+    F: FnMut(u8, u8) -> u8,
 {
     let (width, height) = img.dimensions();
     for y in 0..height - dy {
@@ -38,31 +33,28 @@ fn apply_with_offset<F>(
                 x,
                 y,
                 Luma([func(original_pixel, img.get_pixel(x + dx, y + dy)[0])]),
-            );
-            if dx == 1 {
-                frequencies[original_pixel as usize] += 1;
-            }
+            )
         }
     }
 }
 
-fn extreme<F>(img: &mut GrayImage, dx: u32, dy: u32, compare: F, frequencies: &mut [u32; 256])
+fn extreme<F>(img: &mut GrayImage, dx: u32, dy: u32, compare: &mut F)
 where
-    F: Fn(u8, u8) -> u8,
+    F: FnMut(u8, u8) -> u8,
 {
-    apply_with_offset(img, dx, dy, compare, frequencies)
+    apply_with_offset(img, dx, dy, compare)
 }
 
-fn extreme_around<F>(img: &mut GrayImage, offset: u32, compare: &F, frequencies: &mut [u32; 256])
+fn extreme_around<F>(img: &mut GrayImage, offset: u32, compare: &mut F)
 where
-    F: Fn(u8, u8) -> u8,
+    F: FnMut(u8, u8) -> u8,
 {
-    extreme(img, offset, 0, compare, frequencies);
-    extreme(img, 0, offset, compare, frequencies);
+    extreme(img, offset, 0, compare);
+    extreme(img, 0, offset, compare);
 }
 
 fn subtract(img1: &mut GrayImage, img2: &GrayImage) {
-    apply2(img1, img2, |a, b| a.saturating_sub(b))
+    apply2(img1, img2, &mut |a, b| a.saturating_sub(b))
 }
 
 fn stretch<P, S>(img: &mut ImageBuffer<P, Vec<S>>, border: u32)
@@ -114,7 +106,7 @@ where
 }
 
 fn equalize(img: &mut GrayImage, color_range: GrayImage) {
-    apply2(img, &color_range, |img_pixel, range_pixel| {
+    apply2(img, &color_range, &mut |img_pixel, range_pixel| {
         0u32.max(255u32.min(255u32 * img_pixel as u32 / range_pixel as u32)) as u8
     })
 }
@@ -126,8 +118,8 @@ fn save_debug_image(img: &GrayImage, name: String, debug_mode: bool) -> () {
 }
 
 fn get_min_max_brightness(frequencies: [u32; 256], num_pixels: u32) -> (u8, u8) {
-    let mut bright_count = num_pixels / 2;
-    let mut dark_count = num_pixels / 1000;
+    let mut bright_count = num_pixels / 3;
+    let mut dark_count = num_pixels / 100;
     let mut min_brightness = 0u8;
     let mut max_brightness = 255u8;
     for x in 0u8..255u8 {
@@ -161,35 +153,45 @@ fn main() {
         let smaller_extent = width.min(height);
         let num_pixels = width * height;
         let rounds = log_2(smaller_extent) - 1;
-        let border = 2u32.pow(rounds - 1);
         let mut frequencies = [0; 256];
         let mut min_brightness = 0;
         let mut max_brightness = 255;
+        let bright_rounds = rounds - 2;
+        let dark_rounds = rounds;
         for round in 0..rounds {
             let offset = 2u32.pow(round);
-            if round == 1 {
+            let brighter = &mut |a: u8, b: u8| -> u8 { max_brightness.min(a.max(b)) };
+            if round == 0 {
+                extreme_around(&mut color_range, offset, &mut |a, b| {
+                    frequencies[a as usize] += 1;
+                    brighter(a, b)
+                });
                 let extremes = get_min_max_brightness(frequencies, num_pixels);
                 min_brightness = extremes.0;
                 max_brightness = extremes.1;
+                extreme_around(&mut color_range, offset, brighter);
+            } else if round < bright_rounds {
+                extreme_around(&mut color_range, offset, brighter);
             }
-            let brighter = |a: u8, b| max_brightness.min(a.max(b));
-            let darker = |a: u8, b| min_brightness.max(a.min(b));
-            extreme_around(&mut color_range, offset, &brighter, &mut frequencies);
             save_debug_image(
                 &color_range,
                 format!("brightest.{}.png", offset),
                 args.debug,
             );
-            extreme_around(&mut darkest, offset, &darker, &mut frequencies);
+            if round < dark_rounds {
+                extreme_around(&mut darkest, offset, &mut |a: u8, b: u8| -> u8 {
+                    min_brightness.max(a.min(b))
+                })
+            }
             save_debug_image(&darkest, format!("darkest.{}.png", offset), args.debug);
         }
-        stretch(&mut darkest, border);
+        stretch(&mut darkest, 2u32.pow(dark_rounds - 1));
         save_debug_image(
             &darkest,
             format!("darkest.stretched.{}.png", 2u32.pow(rounds - 1)),
             args.debug,
         );
-        stretch(&mut color_range, border);
+        stretch(&mut color_range, 2u32.pow(bright_rounds - 1));
         save_debug_image(
             &color_range,
             format!("brightest.stretched.{}.png", 2u32.pow(rounds - 1)),
