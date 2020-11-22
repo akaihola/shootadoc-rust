@@ -1,150 +1,141 @@
-use image::imageops::replace;
-use image::math::Rect;
-use image::{open, GenericImage, GenericImageView, ImageBuffer, Pixel, Primitive};
+use image::{open, GrayImage, Luma};
 use std::cmp::min;
 
 mod cli;
 
-const fn num_bits<T>() -> usize {
-    std::mem::size_of::<T>() * 8
-}
-
-fn log_2(x: u32) -> u32 {
-    assert!(x > 0);
-    num_bits::<u32>() as u32 - x.leading_zeros() - 1
-}
-
-fn apply2<I, P, S, F>(img1: I, img2: I, func: F) -> ImageBuffer<P, Vec<S>>
+fn apply2<F>(img1: &mut GrayImage, img2: &GrayImage, func: F)
 where
-    I: GenericImageView<Pixel = P>,
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-    F: Fn(P, P) -> P,
+    F: Fn(u8, u8) -> u8,
 {
-    ImageBuffer::from_fn(img1.width(), img1.height(), |x, y| {
-        let p1: P = img1.get_pixel(x, y);
-        let p2: P = img2.get_pixel(x, y);
-        func(p1, p2)
-    })
+    for (x, y, p) in img1.enumerate_pixels_mut() {
+        *p = Luma([func(p[0], img2.get_pixel(x, y)[0])])
+    }
 }
 
-fn extreme<I, P, S, F>(img1: I, img2: I, compare: F) -> ImageBuffer<P, Vec<S>>
+fn apply_with_offset<F>(img: GrayImage, offset: u32, func: F) -> GrayImage
 where
-    I: GenericImageView<Pixel = P>,
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-    F: Fn(S, S) -> bool,
+    F: Fn(Vec<u8>) -> u8,
 {
-    apply2(img1, img2, |p1, p2| {
-        match compare(p1.to_luma()[0], p2.to_luma()[0]) {
-            true => p1,
-            false => p2,
+    let (width, height) = img.dimensions();
+    let mut result = GrayImage::new(width, height);
+    let next = (offset as i32) / 3;
+    for y in 0..height as i32 {
+        for x in 0..width as i32 {
+            let (x1, x2, x3) = (x - next, x, x + next);
+            let (y1, y2, y3) = (y - next, y, y + next);
+            let area = if y1 < 0 {
+                if x1 < 0 {
+                    vec![(x2, y2), (x3, y2), (x2, y3), (x3, y3)]
+                } else if x3 < width as i32 {
+                    vec![(x1, y2), (x2, y2), (x3, y2), (x1, y3), (x2, y3), (x3, y3)]
+                } else {
+                    vec![(x1, y2), (x2, y2), (x1, y3), (x2, y3)]
+                }
+            } else if y3 < height as i32 {
+                if x1 < 0 {
+                    vec![(x2, y1), (x3, y1), (x2, y2), (x3, y2), (x2, y3), (x3, y3)]
+                } else if x3 < width as i32 {
+                    vec![
+                        (x1, y1),
+                        (x2, y1),
+                        (x3, y1),
+                        (x1, y2),
+                        (x2, y2),
+                        (x3, y2),
+                        (x1, y3),
+                        (x2, y3),
+                        (x3, y3),
+                    ]
+                } else {
+                    vec![(x1, y1), (x2, y1), (x1, y2), (x2, y2), (x1, y3), (x2, y3)]
+                }
+            } else {
+                if x1 < 0 {
+                    vec![(x2, y1), (x3, y1), (x2, y2), (x3, y2)]
+                } else if x3 < width as i32 {
+                    vec![(x1, y1), (x2, y1), (x3, y1), (x1, y2), (x2, y2), (x3, y2)]
+                } else {
+                    vec![(x1, y1), (x2, y1), (x1, y2), (x2, y2)]
+                }
+            };
+            let pixels: Vec<u8> = area
+                .iter()
+                .map(|(ax, ay)| img.get_pixel(*ax as u32, *ay as u32)[0])
+                .collect();
+            result.put_pixel(x as u32, y as u32, Luma([func(pixels)]))
+        }
+    }
+    result
+}
+
+fn extreme_around(img: GrayImage, offset: u32, pick_nth: i8) -> GrayImage {
+    apply_with_offset(img, offset, |pixels: Vec<u8>| {
+        let mut sorted = pixels.clone();
+        sorted.sort_unstable();
+        let len = sorted.len();
+        if pick_nth >= 0 {
+            sorted[len * (pick_nth as usize) / 9]
+        } else {
+            sorted[len - len * (-pick_nth - 1) as usize / 9 - 1]
         }
     })
 }
 
-fn extreme_around<I, P, S, F>(img: I, offset: u32, compare: &F) -> ImageBuffer<P, Vec<S>>
-where
-    I: GenericImageView<Pixel = P>,
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-    F: Fn(S, S) -> bool,
-{
-    let win_width = img.width() - offset;
-    let win_height = img.height() - offset;
-    let orig = img.view(0, 0, win_width, win_height);
-    let left = img.view(offset, 0, win_width, win_height);
-    let up = img.view(0, offset, win_width, win_height);
-    let diag = img.view(offset, offset, win_width, win_height);
-    let top_pixels = extreme(orig, left, compare);
-    let bottom_pixels = extreme(up, diag, compare);
-    extreme(top_pixels, bottom_pixels, compare)
+fn subtract(img1: &mut GrayImage, img2: &GrayImage) {
+    apply2(img1, img2, |a, b| a.saturating_sub(b))
 }
 
-fn pixel_difference<P, S>(pixel1: P, pixel2: P) -> P
-where
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-{
-    let mut result = pixel1.clone();
-    result.apply2(&pixel2, &|a, b| a - b);
-    result
+fn equalize(img: &mut GrayImage, color_range: GrayImage) {
+    apply2(img, &color_range, |img_pixel, range_pixel| {
+        let range_value = range_pixel as f32;
+        (img_pixel as f32 / range_value * 255f32) as u8
+    })
 }
 
-fn difference<I, P, S>(img1: I, img2: I) -> ImageBuffer<P, Vec<S>>
-where
-    I: GenericImageView<Pixel = P>,
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-{
-    apply2(img1, img2, pixel_difference)
-}
-
-fn stretch<I, P, S>(img: I, border: u32) -> ImageBuffer<P, Vec<S>>
-where
-    I: GenericImageView<Pixel = P>,
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-{
-    let w = img.width();
-    let h = img.height();
-    let mut result = ImageBuffer::new(w + 2 * border - 1, h + 2 * border - 1);
-    replace(&mut result, &img, border, border);
-    let rw = result.width();
-    let rh = result.height();
-    let top = Rect {
-        x: 0,
-        y: border,
-        width: rw,
-        height: 1,
-    };
-    let bottom = Rect {
-        x: 0,
-        y: border + h - 1,
-        width: rw,
-        height: 1,
-    };
-    let left = Rect {
-        x: border,
-        y: 0,
-        width: 1,
-        height: rh,
-    };
-    let right = Rect {
-        x: border + w - 1,
-        y: 0,
-        width: 1,
-        height: rh,
-    };
-    for y in 0..border {
-        result.copy_within(top, 0, y);
-        result.copy_within(bottom, 0, rh - y - 1);
+fn save_debug_image(img: &GrayImage, name: String, debug_mode: bool) -> () {
+    if debug_mode {
+        img.save(format!("/tmp/{}", name)).unwrap();
     }
-    for x in 0..border {
-        result.copy_within(left, x, 0);
-        result.copy_within(right, rw - x - 1, 0);
-    }
-    result
 }
 
 fn main() {
-    let brighter = |a, b| a > b;
-    let darker = |a, b| a < b;
+    let brighter = -2;
+    let darker = 0;
     let args = cli::parse_args();
     for f in args.in_file_path {
-        let mut brightest = open(&f).unwrap().grayscale().to_luma();
-        let mut darkest = brightest.clone();
-        let smaller_extent = min(brightest.width(), brightest.height());
-        let rounds = log_2(smaller_extent) - 1;
-        for round in 0..rounds {
-            let offset = 2u32.pow(round);
-            brightest = extreme_around(brightest, offset, &brighter);
-            darkest = extreme_around(darkest, offset, &darker);
+        let mut img: GrayImage = open(&f).unwrap().grayscale().to_luma();
+        save_debug_image(&img, format!("darkest.0.png"), args.debug);
+        let mut color_range = img.clone();
+        let mut darkest = color_range.clone();
+        let smaller_extent = min(img.width(), img.height());
+        let rounds = (smaller_extent as f32).log(3.0) as u32;
+        let border = 3u32.pow(rounds);
+        for round in 0..rounds + 1 {
+            let offset = 3u32.pow(round);
+            color_range = extreme_around(color_range, offset, brighter);
+            save_debug_image(
+                &color_range,
+                format!("brightest.{}.png", offset),
+                args.debug,
+            );
+            darkest = extreme_around(darkest, offset, darker);
+            save_debug_image(&darkest, format!("darkest.{}.png", offset), args.debug);
         }
-        let brightest_stretched = stretch(brightest, 2u32.pow(rounds - 1));
-        let darkest_stretched = stretch(darkest, 2u32.pow(rounds - 1));
-        difference(brightest_stretched, darkest_stretched)
-            .save(cli::get_out_fname(&f))
-            .unwrap();
+        save_debug_image(
+            &darkest,
+            format!("darkest.stretched.{}.png", border),
+            args.debug,
+        );
+        save_debug_image(
+            &color_range,
+            format!("brightest.stretched.{}.png", border),
+            args.debug,
+        );
+        subtract(&mut color_range, &darkest);
+        save_debug_image(&color_range, "color_range.png".to_string(), args.debug);
+        subtract(&mut img, &darkest);
+        save_debug_image(&img, "img.unequalized.png".to_string(), args.debug);
+        equalize(&mut img, color_range);
+        img.save(cli::get_out_fname(&f)).unwrap();
     }
 }
