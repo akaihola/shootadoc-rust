@@ -1,6 +1,5 @@
 use image::math::Rect;
-use image::{open, GenericImage, GenericImageView, GrayImage, ImageBuffer, Pixel, Primitive};
-use std::cmp::min;
+use image::{open, GenericImage, GrayImage, ImageBuffer, Luma, Pixel, Primitive};
 
 mod cli;
 
@@ -13,77 +12,57 @@ fn log_2(x: u32) -> u32 {
     num_bits::<u32>() as u32 - x.leading_zeros() - 1
 }
 
-fn apply2<I, P, S, F>(img1: &mut ImageBuffer<P, Vec<S>>, img2: &I, func: F)
+fn apply2<F>(img1: &mut GrayImage, img2: &GrayImage, func: F)
 where
-    I: GenericImageView<Pixel = P>,
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-    F: Fn(P, P) -> P,
+    F: Fn(u8, u8) -> u8,
 {
     for (x, y, p) in img1.enumerate_pixels_mut() {
-        *p = func(*p, img2.get_pixel(x, y))
+        *p = Luma([func(p[0], img2.get_pixel(x, y)[0])])
     }
 }
 
-fn apply_with_offset<P, S, F>(img: &mut ImageBuffer<P, Vec<S>>, dx: u32, dy: u32, func: F)
-where
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-    F: Fn(P, P) -> P,
+fn apply_with_offset<F>(
+    img: &mut GrayImage,
+    dx: u32,
+    dy: u32,
+    func: F,
+    frequencies: &mut [u32; 256],
+) where
+    F: Fn(u8, u8) -> u8,
 {
     let (width, height) = img.dimensions();
     for y in 0..height - dy {
         for x in 0..width - dx {
+            let original_pixel = img.get_pixel(x, y)[0];
             img.put_pixel(
                 x,
                 y,
-                func(*img.get_pixel(x, y), *img.get_pixel(x + dx, y + dy)),
-            )
+                Luma([func(original_pixel, img.get_pixel(x + dx, y + dy)[0])]),
+            );
+            if dx == 1 {
+                frequencies[original_pixel as usize] += 1;
+            }
         }
     }
 }
 
-fn extreme<P, S, F>(img: &mut ImageBuffer<P, Vec<S>>, dx: u32, dy: u32, compare: F)
+fn extreme<F>(img: &mut GrayImage, dx: u32, dy: u32, compare: F, frequencies: &mut [u32; 256])
 where
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-    F: Fn(S, S) -> bool,
+    F: Fn(u8, u8) -> u8,
 {
-    apply_with_offset(img, dx, dy, |p1, p2| {
-        match compare(p1.to_luma()[0], p2.to_luma()[0]) {
-            true => p1,
-            false => p2,
-        }
-    })
+    apply_with_offset(img, dx, dy, compare, frequencies)
 }
 
-fn extreme_around<P, S, F>(img: &mut ImageBuffer<P, Vec<S>>, offset: u32, compare: &F)
+fn extreme_around<F>(img: &mut GrayImage, offset: u32, compare: &F, frequencies: &mut [u32; 256])
 where
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-    F: Fn(S, S) -> bool,
+    F: Fn(u8, u8) -> u8,
 {
-    extreme(img, offset, 0, compare);
-    extreme(img, 0, offset, compare);
+    extreme(img, offset, 0, compare, frequencies);
+    extreme(img, 0, offset, compare, frequencies);
 }
 
-fn pixel_difference<P, S>(pixel1: P, pixel2: P) -> P
-where
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-{
-    let mut result = pixel1.clone();
-    result.apply2(&pixel2, &|a, b| a - b);
-    result
-}
-
-fn subtract<I, P, S>(img1: &mut ImageBuffer<P, Vec<S>>, img2: &I)
-where
-    I: GenericImageView<Pixel = P>,
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-{
-    apply2(img1, img2, pixel_difference)
+fn subtract(img1: &mut GrayImage, img2: &GrayImage) {
+    apply2(img1, img2, |a, b| a.saturating_sub(b))
 }
 
 fn stretch<P, S>(img: &mut ImageBuffer<P, Vec<S>>, border: u32)
@@ -134,19 +113,9 @@ where
     }
 }
 
-fn equalize<I, P, S>(img: &mut ImageBuffer<P, Vec<S>>, color_range: I)
-where
-    I: GenericImageView<Pixel = P>,
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-{
+fn equalize(img: &mut GrayImage, color_range: GrayImage) {
     apply2(img, &color_range, |img_pixel, range_pixel| {
-        let range_value = range_pixel.to_luma()[0].to_f32().unwrap();
-        img_pixel.map_without_alpha(|value: S| {
-            let value_f32 = value.to_f32().unwrap();
-            let new_value_f32 = value_f32 / range_value * 255f32;
-            S::from(new_value_f32).unwrap()
-        })
+        0u32.max(255u32.min(255u32 * img_pixel as u32 / range_pixel as u32)) as u8
     })
 }
 
@@ -156,27 +125,62 @@ fn save_debug_image(img: &GrayImage, name: String, debug_mode: bool) -> () {
     }
 }
 
+fn get_min_max_brightness(frequencies: [u32; 256], num_pixels: u32) -> (u8, u8) {
+    let mut bright_count = num_pixels / 2;
+    let mut dark_count = num_pixels / 1000;
+    let mut min_brightness = 0u8;
+    let mut max_brightness = 255u8;
+    for x in 0u8..255u8 {
+        bright_count = bright_count.saturating_sub(frequencies[255 - x as usize]);
+        if bright_count == 0 {
+            max_brightness = 255 - x;
+        }
+        dark_count = dark_count.saturating_sub(frequencies[x as usize]);
+        if dark_count == 0 {
+            min_brightness = x;
+        }
+        println!(
+            "Finding {} extremes {}..{}",
+            x, min_brightness, max_brightness
+        );
+        if bright_count == 0 && dark_count == 0 {
+            break;
+        }
+    }
+    (min_brightness, max_brightness)
+}
+
 fn main() {
-    let brighter = |a, b| a > b;
-    let darker = |a, b| a < b;
     let args = cli::parse_args();
     for f in args.in_file_path {
         let mut img = open(&f).unwrap().grayscale().to_luma();
         save_debug_image(&img, format!("darkest.0.png"), args.debug);
         let mut color_range = img.clone();
         let mut darkest = color_range.clone();
-        let smaller_extent = min(img.width(), img.height());
+        let (width, height) = img.dimensions();
+        let smaller_extent = width.min(height);
+        let num_pixels = width * height;
         let rounds = log_2(smaller_extent) - 1;
         let border = 2u32.pow(rounds - 1);
+        let mut frequencies = [0; 256];
+        let mut min_brightness = 0;
+        let mut max_brightness = 255;
         for round in 0..rounds {
             let offset = 2u32.pow(round);
-            extreme_around(&mut color_range, offset, &brighter);
+            if round == 1 {
+                let extremes = get_min_max_brightness(frequencies, num_pixels);
+                min_brightness = extremes.0;
+                max_brightness = extremes.1;
+            }
+            let brighter = |a: u8, b| max_brightness.min(a.max(b));
+            let darker = |a: u8, b| min_brightness.max(a.min(b));
+            extreme_around(&mut color_range, offset, &brighter, &mut frequencies);
             save_debug_image(
                 &color_range,
                 format!("brightest.{}.png", offset),
                 args.debug,
             );
-            extreme_around(&mut darkest, offset, &darker);
+            extreme_around(&mut darkest, offset, &darker, &mut frequencies);
             save_debug_image(&darkest, format!("darkest.{}.png", offset), args.debug);
         }
         stretch(&mut darkest, border);
