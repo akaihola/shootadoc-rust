@@ -98,7 +98,9 @@ where
     }
 }
 
-fn equalize(img: &mut GrayImage, color_range: GrayImage) {
+fn equalize(img: &mut GrayImage, darkest: GrayImage, color_range: GrayImage, debug_mode: bool) {
+    subtract(img, &darkest);
+    save_debug_image(&img, "corrected.unequalized.png".to_string(), debug_mode);
     apply2(img, &color_range, |img_pixel, range_pixel| {
         0u32.max(255u32.min(255u32 * img_pixel as u32 / range_pixel as u32)) as u8
     })
@@ -161,13 +163,7 @@ fn main() {
         save_debug_image(&color_range, "color_range.png".to_string(), args.debug);
 
         let mut corrected = img;
-        subtract(&mut corrected, &darkest);
-        save_debug_image(
-            &corrected,
-            "corrected.unequalized.png".to_string(),
-            args.debug,
-        );
-        equalize(&mut corrected, color_range);
+        equalize(&mut corrected, darkest, color_range, args.debug);
         corrected.save(cli::get_out_fname(&f)).unwrap();
     }
 }
