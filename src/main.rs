@@ -113,9 +113,12 @@ fn stretch_pixel_brightness(value: u8, black: u8, range: u8) -> u8 {
 
 fn equalize(img: &mut GrayImage, darkest: GrayImage, color_range: GrayImage, debug_mode: bool) {
     save_debug_image(&img, "corrected.unequalized.png".to_string(), debug_mode);
-    apply3(img, &darkest, &color_range, |img_pixel, black, range_pixel| {
-        stretch_pixel_brightness(img_pixel, black, range_pixel)
-    })
+    apply3(
+        img,
+        &darkest,
+        &color_range,
+        |img_pixel, black, range_pixel| stretch_pixel_brightness(img_pixel, black, range_pixel),
+    )
 }
 
 fn save_debug_image(img: &GrayImage, name: String, debug_mode: bool) -> () {
@@ -132,7 +135,7 @@ fn darker(a: u8, b: u8) -> u8 {
     a.min(b)
 }
 
-fn histogram(img: &GrayImage) -> [u32; 256] {
+fn get_distribution(img: &GrayImage) -> [u32; 256] {
     let mut result = [0; 256];
     for p in img.pixels() {
         result[p[0] as usize] += 1;
@@ -143,52 +146,56 @@ fn histogram(img: &GrayImage) -> [u32; 256] {
     result
 }
 
-fn smooth(histogram: &mut [u32; 256], right_to_left: bool) -> Vec<u8> {
-    let mut prev_direction = 0;
-    let mut turns = vec![];
+fn smooth_and_get_local_extrema(distribution: &mut [u32; 256], right_to_left: bool) -> Vec<u8> {
+    let mut prev_derivative = 0;
+    let mut local_extrema = vec![];
     for i in 0..255 {
-        let (prev_index, index, next_index) = if !right_to_left {
-            (i - 1, i, i + 1)
-        } else {
+        let (prev_index, index, next_index) = if right_to_left {
             (256 - i, 255 - i, 254 - i)
+        } else {
+            (i - 1, i, i + 1)
         };
-        histogram[index] = (histogram[index] + histogram[next_index]) / 2;
-        if i == 0 {
-            continue;
-        };
-        let direction = i64::signum(histogram[index] as i64 - histogram[prev_index] as i64);
-        if direction != 0 && direction != prev_direction {
-            if prev_direction != 0 {
-                turns.push(index as u8);
+        distribution[index] = (distribution[index] + distribution[next_index]) / 2;
+        if i > 0 {
+            let derivative =
+                i64::signum(distribution[index] as i64 - distribution[prev_index] as i64);
+            if derivative != 0 && derivative != prev_derivative {
+                if prev_derivative != 0 {
+                    local_extrema.push(index as u8);
+                }
+                prev_derivative = derivative
             }
-            prev_direction = direction
         }
     }
     if right_to_left {
-        turns.reverse()
+        local_extrema.reverse()
     }
-    turns
+    local_extrema
 }
 
-fn get_turns(img: &GrayImage, debug_mode: bool) -> (u8, u8) {
-    let mut h = histogram(&img);
+fn get_local_extrema(img: &GrayImage, debug_mode: bool) -> (u8, u8) {
+    let mut distribution = get_distribution(&img);
     let mut round = 0;
-    let turns = loop {
-        let turns = smooth(&mut h, round % 2 == 1);
+    let local_extrema = loop {
+        let local_extrema = smooth_and_get_local_extrema(&mut distribution, round % 2 == 1);
         if debug_mode {
-            println!("Turns after smoothing: {:?}", turns)
+            println!("Turns after smoothing: {:?}", local_extrema)
         }
         round += 1;
-        if turns.len() <= 3 || round > 100 {
-            break turns;
+        if local_extrema.len() <= 3 || round > 100 {
+            break local_extrema;
         }
     };
-    if turns.len() < 2 {
+    if local_extrema.len() < 2 {
         (0, 255)
     } else {
-        let dark = 2 * turns[0];
-        let light = 255 - 2 * (255 - turns[turns.len() - 1]);
-        if dark > light { (0, 255) } else { (dark, light) }
+        let dark = 2 * local_extrema[0];
+        let light = 255 - 2 * (255 - local_extrema[local_extrema.len() - 1]);
+        if dark > light {
+            (0, 255)
+        } else {
+            (dark, light)
+        }
     }
 }
 
@@ -236,7 +243,7 @@ fn main() {
 
         let mut corrected = img;
         equalize(&mut corrected, darkest, color_range, args.debug);
-        let (dark, light) = get_turns(&corrected, args.debug);
+        let (dark, light) = get_local_extrema(&corrected, args.debug);
         if light > dark && dark > 0 && light < 255 {
             let range = light - dark;
             if args.debug {
