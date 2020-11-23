@@ -21,6 +21,15 @@ where
     }
 }
 
+fn apply3<F>(img1: &mut GrayImage, img2: &GrayImage, img3: &GrayImage, func: F)
+where
+    F: Fn(u8, u8, u8) -> u8,
+{
+    for (x, y, p) in img1.enumerate_pixels_mut() {
+        *p = Luma([func(p[0], img2.get_pixel(x, y)[0], img3.get_pixel(x, y)[0])])
+    }
+}
+
 fn apply_with_offset<F>(img: &mut GrayImage, dx: u32, dy: u32, func: F)
 where
     F: Fn(u8, u8) -> u8,
@@ -98,11 +107,14 @@ where
     }
 }
 
+fn stretch_pixel_brightness(value: u8, black: u8, range: u8) -> u8 {
+    255.min(255 * value.saturating_sub(black) as u32 / range as u32) as u8
+}
+
 fn equalize(img: &mut GrayImage, darkest: GrayImage, color_range: GrayImage, debug_mode: bool) {
-    subtract(img, &darkest);
     save_debug_image(&img, "corrected.unequalized.png".to_string(), debug_mode);
-    apply2(img, &color_range, |img_pixel, range_pixel| {
-        0u32.max(255u32.min(255u32 * img_pixel as u32 / range_pixel as u32)) as u8
+    apply3(img, &darkest, &color_range, |img_pixel, black, range_pixel| {
+        stretch_pixel_brightness(img_pixel, black, range_pixel)
     })
 }
 
@@ -118,6 +130,66 @@ fn brighter(a: u8, b: u8) -> u8 {
 
 fn darker(a: u8, b: u8) -> u8 {
     a.min(b)
+}
+
+fn histogram(img: &GrayImage) -> [u32; 256] {
+    let mut result = [0; 256];
+    for p in img.pixels() {
+        result[p[0] as usize] += 1;
+    }
+    for i in 0..256 {
+        result[i] = ((result[i] as f32) + 1f32).log(1.1) as u32
+    }
+    result
+}
+
+fn smooth(histogram: &mut [u32; 256], right_to_left: bool) -> Vec<u8> {
+    let mut prev_direction = 0;
+    let mut turns = vec![];
+    for i in 0..255 {
+        let (prev_index, index, next_index) = if !right_to_left {
+            (i - 1, i, i + 1)
+        } else {
+            (256 - i, 255 - i, 254 - i)
+        };
+        histogram[index] = (histogram[index] + histogram[next_index]) / 2;
+        if i == 0 {
+            continue;
+        };
+        let direction = i64::signum(histogram[index] as i64 - histogram[prev_index] as i64);
+        if direction != 0 && direction != prev_direction {
+            if prev_direction != 0 {
+                turns.push(index as u8);
+            }
+            prev_direction = direction
+        }
+    }
+    if right_to_left {
+        turns.reverse()
+    }
+    turns
+}
+
+fn get_turns(img: &GrayImage, debug_mode: bool) -> (u8, u8) {
+    let mut h = histogram(&img);
+    let mut round = 0;
+    let turns = loop {
+        let turns = smooth(&mut h, round % 2 == 1);
+        if debug_mode {
+            println!("Turns after smoothing: {:?}", turns)
+        }
+        round += 1;
+        if turns.len() <= 3 || round > 100 {
+            break turns;
+        }
+    };
+    if turns.len() < 2 {
+        (0, 255)
+    } else {
+        let dark = 2 * turns[0];
+        let light = 255 - 2 * (255 - turns[turns.len() - 1]);
+        if dark > light { (0, 255) } else { (dark, light) }
+    }
 }
 
 fn main() {
@@ -164,6 +236,16 @@ fn main() {
 
         let mut corrected = img;
         equalize(&mut corrected, darkest, color_range, args.debug);
+        let (dark, light) = get_turns(&corrected, args.debug);
+        if light > dark && dark > 0 && light < 255 {
+            let range = light - dark;
+            if args.debug {
+                println!("{}..{} range is {}", dark, light, range)
+            }
+            for (_, _, p) in corrected.enumerate_pixels_mut() {
+                *p = Luma([stretch_pixel_brightness(p[0], dark, range)])
+            }
+        }
         corrected.save(cli::get_out_fname(&f)).unwrap();
     }
 }
