@@ -242,7 +242,7 @@ fn main() {
             if args.debug {
                 println!("{}..{} range is {}", dark, light, range)
             }
-            for (_, _, p) in corrected.enumerate_pixels_mut() {
+            for p in corrected.pixels_mut() {
                 *p = Luma([stretch_pixel_brightness(p[0], dark, range)])
             }
         }
