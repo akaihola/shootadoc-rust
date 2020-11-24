@@ -30,7 +30,7 @@ where
     }
 }
 
-fn apply_with_offset<F>(img: &mut GrayImage, dx: u32, dy: u32, func: F)
+fn shift_and_apply2<F>(img: &mut GrayImage, dx: u32, dy: u32, func: F)
 where
     F: Fn(u8, u8) -> u8,
 {
@@ -47,19 +47,19 @@ where
     }
 }
 
-fn extreme_around<F>(img: &mut GrayImage, offset: u32, compare: &F)
+fn replace_with_surrounding_extreme<F>(img: &mut GrayImage, distance: u32, compare: &F)
 where
     F: Fn(u8, u8) -> u8,
 {
-    apply_with_offset(img, offset, 0, compare);
-    apply_with_offset(img, 0, offset, compare);
+    shift_and_apply2(img, distance, 0, compare);
+    shift_and_apply2(img, 0, distance, compare);
 }
 
 fn subtract(img1: &mut GrayImage, img2: &GrayImage) {
     apply2(img1, img2, |a, b| a.saturating_sub(b))
 }
 
-fn stretch<P, S>(img: &mut ImageBuffer<P, Vec<S>>, border: u32)
+fn center_and_stretch<P, S>(img: &mut ImageBuffer<P, Vec<S>>, border: u32)
 where
     P: Pixel<Subpixel = S> + 'static,
     S: Primitive + 'static,
@@ -107,17 +107,22 @@ where
     }
 }
 
-fn stretch_pixel_brightness(value: u8, black: u8, range: u8) -> u8 {
+fn equalize(value: u8, black: u8, range: u8) -> u8 {
     255.min(255 * value.saturating_sub(black) as u32 / range as u32) as u8
 }
 
-fn equalize(img: &mut GrayImage, darkest: GrayImage, color_range: GrayImage, debug_mode: bool) {
+fn local_equalize(
+    img: &mut GrayImage,
+    local_black: GrayImage,
+    local_range: GrayImage,
+    debug_mode: bool,
+) {
     save_debug_image(&img, "corrected.unequalized.png".to_string(), debug_mode);
     apply3(
         img,
-        &darkest,
-        &color_range,
-        |img_pixel, black, range_pixel| stretch_pixel_brightness(img_pixel, black, range_pixel),
+        &local_black,
+        &local_range,
+        |img_pixel, black, range| equalize(img_pixel, black, range),
     )
 }
 
@@ -173,11 +178,10 @@ fn smooth_and_get_local_extrema(distribution: &mut [u32; 256], right_to_left: bo
     local_extrema
 }
 
-fn get_local_extrema(img: &GrayImage, debug_mode: bool) -> (u8, u8) {
-    let mut distribution = get_distribution(&img);
+fn get_local_extrema(distribution: &mut [u32; 256], debug_mode: bool) -> (u8, u8) {
     let mut round = 0;
     let local_extrema = loop {
-        let local_extrema = smooth_and_get_local_extrema(&mut distribution, round % 2 == 1);
+        let local_extrema = smooth_and_get_local_extrema(distribution, round % 2 == 1);
         if debug_mode {
             println!("Turns after smoothing: {:?}", local_extrema)
         }
@@ -202,57 +206,71 @@ fn get_local_extrema(img: &GrayImage, debug_mode: bool) -> (u8, u8) {
 fn main() {
     let args = cli::parse_args();
     for f in args.in_file_path {
-        let img = open(&f).unwrap().grayscale().to_luma();
-        save_debug_image(&img, format!("darkest.0.png"), args.debug);
-        let (width, height) = img.dimensions();
+        let original_image = open(&f).unwrap().grayscale().to_luma();
+        save_debug_image(&original_image, format!("darkest.0.png"), args.debug);
+        let (width, height) = original_image.dimensions();
         let smaller_extent = width.min(height);
         let max_rounds = log_2(smaller_extent) - 1;
-        let bright_rounds = max_rounds - 2;
-        let dark_rounds = max_rounds;
-        let mut darkest = img.clone();
-        extreme_around(&mut darkest, 1, &darker);
-        save_debug_image(&darkest, format!("darkest.0.png"), args.debug);
-        let mut brightest = darkest.clone();
-        for round in 1..bright_rounds.max(dark_rounds) {
-            let offset = 2u32.pow(round);
-            if round < bright_rounds {
-                extreme_around(&mut brightest, offset, &brighter);
+        let white_rounds = max_rounds - 2;
+        let black_rounds = max_rounds;
+        let mut local_black = original_image.clone();
+        replace_with_surrounding_extreme(&mut local_black, 1, &darker);
+        save_debug_image(&local_black, format!("darkest.0.png"), args.debug);
+        let mut local_white = local_black.clone();
+        for round in 1..white_rounds.max(black_rounds) {
+            let distance = 2u32.pow(round);
+            if round < white_rounds {
+                replace_with_surrounding_extreme(&mut local_white, distance, &brighter);
             }
-            save_debug_image(&brightest, format!("brightest.{}.png", offset), args.debug);
-            if round < dark_rounds {
-                extreme_around(&mut darkest, offset, &darker)
+            save_debug_image(
+                &local_white,
+                format!("brightest.{}.png", distance),
+                args.debug,
+            );
+            if round < black_rounds {
+                replace_with_surrounding_extreme(&mut local_black, distance, &darker)
             }
-            save_debug_image(&darkest, format!("darkest.{}.png", offset), args.debug);
+            save_debug_image(
+                &local_black,
+                format!("darkest.{}.png", distance),
+                args.debug,
+            );
         }
-        stretch(&mut darkest, 2u32.pow(dark_rounds - 1));
+        let black_center = 2u32.pow(black_rounds - 1);
+        center_and_stretch(&mut local_black, black_center);
         save_debug_image(
-            &darkest,
-            format!("darkest.stretched.{}.png", 2u32.pow(dark_rounds - 1)),
+            &local_black,
+            format!("darkest.stretched.{}.png", black_center),
             args.debug,
         );
-        stretch(&mut brightest, 2u32.pow(bright_rounds - 1));
+        let white_center = 2u32.pow(white_rounds - 1);
+        center_and_stretch(&mut local_white, white_center);
         save_debug_image(
-            &brightest,
-            format!("brightest.stretched.{}.png", 2u32.pow(bright_rounds - 1)),
+            &local_white,
+            format!("brightest.stretched.{}.png", white_center),
             args.debug,
         );
 
-        let mut color_range = brightest;
-        subtract(&mut color_range, &darkest);
-        save_debug_image(&color_range, "color_range.png".to_string(), args.debug);
+        let mut local_range = local_white;
+        subtract(&mut local_range, &local_black);
+        save_debug_image(&local_range, "color_range.png".to_string(), args.debug);
 
-        let mut corrected = img;
-        equalize(&mut corrected, darkest, color_range, args.debug);
-        let (dark, light) = get_local_extrema(&corrected, args.debug);
-        if light > dark && dark > 0 && light < 255 {
-            let range = light - dark;
+        let mut corrected_image = original_image;
+        local_equalize(&mut corrected_image, local_black, local_range, args.debug);
+        let mut distribution = get_distribution(&corrected_image);
+        let (global_black, global_white) = get_local_extrema(&mut distribution, args.debug);
+        if global_white > global_black && global_black > 0 && global_white < 255 {
+            let global_range = global_white - global_black;
             if args.debug {
-                println!("{}..{} range is {}", dark, light, range)
+                println!(
+                    "{}..{} range is {}",
+                    global_black, global_white, global_range
+                )
             }
-            for p in corrected.pixels_mut() {
-                *p = Luma([stretch_pixel_brightness(p[0], dark, range)])
+            for p in corrected_image.pixels_mut() {
+                *p = Luma([equalize(p[0], global_black, global_range)])
             }
         }
-        corrected.save(cli::get_out_fname(&f)).unwrap();
+        corrected_image.save(cli::get_out_fname(&f)).unwrap();
     }
 }
