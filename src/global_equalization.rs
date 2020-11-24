@@ -53,15 +53,16 @@ pub fn get_distribution_local_extrema(distribution: &mut [u32; 256], debug_mode:
             break local_extrema;
         }
     };
-    if local_extrema.len() < 2 {
-        (0, 255)
-    } else {
-        let dark = 2 * local_extrema[0];
-        let light = 255 - 2 * (255 - local_extrema[local_extrema.len() - 1]);
-        if dark > light {
-            (0, 255)
-        } else {
-            (dark, light)
+    match local_extrema[..] {
+        [first_extreme, .., last_extreme] => {
+            let black = 2 * first_extreme;
+            let white = 255 - 2 * (255 - last_extreme);
+            if black > white {
+                (0, 255)
+            } else {
+                (black, white)
+            }
         }
+        _ => (0, 255),
     }
 }
