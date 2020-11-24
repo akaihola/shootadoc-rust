@@ -44,7 +44,8 @@ fn smooth_and_get_distribution_local_extrema(
 pub fn get_distribution_local_extrema(distribution: &mut [u32; 256], debug_mode: bool) -> (u8, u8) {
     let mut round = 0;
     let local_extrema = loop {
-        let local_extrema = smooth_and_get_distribution_local_extrema(distribution, round % 2 == 1);
+        let right_to_left = round % 2 == 1;
+        let local_extrema = smooth_and_get_distribution_local_extrema(distribution, right_to_left);
         if debug_mode {
             println!("Turns after smoothing: {:?}", local_extrema)
         }
