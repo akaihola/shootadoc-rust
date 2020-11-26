@@ -9,6 +9,8 @@ use structopt::StructOpt;
 pub struct Arguments {
     #[structopt(parse(from_os_str))]
     pub in_file_path: Vec<PathBuf>,
+    #[structopt(short, long)]
+    pub debug: bool,
 }
 pub fn parse_args() -> Arguments {
     Arguments::from_args()

@@ -1,150 +1,158 @@
-use image::imageops::replace;
 use image::math::Rect;
-use image::{open, GenericImage, GenericImageView, ImageBuffer, Pixel, Primitive};
-use std::cmp::min;
+use image::{open, GenericImage, GrayImage, ImageBuffer, Luma, Pixel, Primitive};
 
 mod cli;
+mod global_equalization;
+mod imageops;
+mod math;
+mod pixelops;
 
-const fn num_bits<T>() -> usize {
-    std::mem::size_of::<T>() * 8
-}
-
-fn log_2(x: u32) -> u32 {
-    assert!(x > 0);
-    num_bits::<u32>() as u32 - x.leading_zeros() - 1
-}
-
-fn apply2<I, P, S, F>(img1: I, img2: I, func: F) -> ImageBuffer<P, Vec<S>>
+fn replace_with_surrounding_extreme<F>(img: &mut GrayImage, distance: u32, compare: &F)
 where
-    I: GenericImageView<Pixel = P>,
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-    F: Fn(P, P) -> P,
+    F: Fn(u8, u8) -> u8,
 {
-    ImageBuffer::from_fn(img1.width(), img1.height(), |x, y| {
-        let p1: P = img1.get_pixel(x, y);
-        let p2: P = img2.get_pixel(x, y);
-        func(p1, p2)
-    })
+    imageops::shift_and_apply2(img, distance, 0, compare);
+    imageops::shift_and_apply2(img, 0, distance, compare);
 }
 
-fn extreme<I, P, S, F>(img1: I, img2: I, compare: F) -> ImageBuffer<P, Vec<S>>
-where
-    I: GenericImageView<Pixel = P>,
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-    F: Fn(S, S) -> bool,
-{
-    apply2(img1, img2, |p1, p2| {
-        match compare(p1.to_luma()[0], p2.to_luma()[0]) {
-            true => p1,
-            false => p2,
-        }
-    })
-}
-
-fn extreme_around<I, P, S, F>(img: I, offset: u32, compare: &F) -> ImageBuffer<P, Vec<S>>
-where
-    I: GenericImageView<Pixel = P>,
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-    F: Fn(S, S) -> bool,
-{
-    let win_width = img.width() - offset;
-    let win_height = img.height() - offset;
-    let orig = img.view(0, 0, win_width, win_height);
-    let left = img.view(offset, 0, win_width, win_height);
-    let up = img.view(0, offset, win_width, win_height);
-    let diag = img.view(offset, offset, win_width, win_height);
-    let top_pixels = extreme(orig, left, compare);
-    let bottom_pixels = extreme(up, diag, compare);
-    extreme(top_pixels, bottom_pixels, compare)
-}
-
-fn pixel_difference<P, S>(pixel1: P, pixel2: P) -> P
+fn center_and_stretch<P, S>(img: &mut ImageBuffer<P, Vec<S>>, border: u32)
 where
     P: Pixel<Subpixel = S> + 'static,
     S: Primitive + 'static,
 {
-    let mut result = pixel1.clone();
-    result.apply2(&pixel2, &|a, b| a - b);
-    result
-}
-
-fn difference<I, P, S>(img1: I, img2: I) -> ImageBuffer<P, Vec<S>>
-where
-    I: GenericImageView<Pixel = P>,
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-{
-    apply2(img1, img2, pixel_difference)
-}
-
-fn stretch<I, P, S>(img: I, border: u32) -> ImageBuffer<P, Vec<S>>
-where
-    I: GenericImageView<Pixel = P>,
-    P: Pixel<Subpixel = S> + 'static,
-    S: Primitive + 'static,
-{
-    let w = img.width();
-    let h = img.height();
-    let mut result = ImageBuffer::new(w + 2 * border - 1, h + 2 * border - 1);
-    replace(&mut result, &img, border, border);
-    let rw = result.width();
-    let rh = result.height();
+    let (width, height) = img.dimensions();
+    let (area_width, area_height) = (width - 2 * border, height - 2 * border);
+    let area = Rect {
+        x: 0,
+        y: 0,
+        width: area_width,
+        height: area_height,
+    };
+    img.copy_within(area, border, border);
     let top = Rect {
         x: 0,
         y: border,
-        width: rw,
+        width,
         height: 1,
     };
     let bottom = Rect {
         x: 0,
-        y: border + h - 1,
-        width: rw,
+        y: border + area_height - 1,
+        width,
         height: 1,
     };
     let left = Rect {
         x: border,
         y: 0,
         width: 1,
-        height: rh,
+        height,
     };
     let right = Rect {
-        x: border + w - 1,
+        x: border + area_width - 1,
         y: 0,
         width: 1,
-        height: rh,
+        height,
     };
     for y in 0..border {
-        result.copy_within(top, 0, y);
-        result.copy_within(bottom, 0, rh - y - 1);
+        img.copy_within(top, 0, y);
+        img.copy_within(bottom, 0, height - y - 1);
     }
     for x in 0..border {
-        result.copy_within(left, x, 0);
-        result.copy_within(right, rw - x - 1, 0);
+        img.copy_within(left, x, 0);
+        img.copy_within(right, width - x - 1, 0);
     }
-    result
+}
+
+fn local_equalize(
+    img: &mut GrayImage,
+    local_black: GrayImage,
+    local_range: GrayImage,
+    debug_mode: bool,
+) {
+    save_debug_image(&img, "corrected.unequalized.png".to_string(), debug_mode);
+    imageops::apply3(
+        img,
+        &local_black,
+        &local_range,
+        |img_pixel, black, range| pixelops::equalize(img_pixel, black, range),
+    )
+}
+
+fn save_debug_image(img: &GrayImage, name: String, debug_mode: bool) -> () {
+    if debug_mode {
+        img.save(format!("/tmp/{}", name)).unwrap();
+    }
 }
 
 fn main() {
-    let brighter = |a, b| a > b;
-    let darker = |a, b| a < b;
     let args = cli::parse_args();
     for f in args.in_file_path {
-        let mut brightest = open(&f).unwrap().grayscale().to_luma();
-        let mut darkest = brightest.clone();
-        let smaller_extent = min(brightest.width(), brightest.height());
-        let rounds = log_2(smaller_extent) - 1;
-        for round in 0..rounds {
-            let offset = 2u32.pow(round);
-            brightest = extreme_around(brightest, offset, &brighter);
-            darkest = extreme_around(darkest, offset, &darker);
+        let original_image = open(&f).unwrap().grayscale().to_luma();
+        save_debug_image(&original_image, format!("darkest.0.png"), args.debug);
+        let (width, height) = original_image.dimensions();
+        let smaller_extent = width.min(height);
+        let max_rounds = math::log_2(smaller_extent) - 1;
+        let white_rounds = max_rounds - 2;
+        let black_rounds = max_rounds;
+        let mut local_black = original_image.clone();
+        replace_with_surrounding_extreme(&mut local_black, 1, &pixelops::darker);
+        save_debug_image(&local_black, format!("darkest.0.png"), args.debug);
+        let mut local_white = local_black.clone();
+        for round in 1..white_rounds.max(black_rounds) {
+            let distance = 2u32.pow(round);
+            if round < white_rounds {
+                replace_with_surrounding_extreme(&mut local_white, distance, &pixelops::brighter);
+            }
+            save_debug_image(
+                &local_white,
+                format!("brightest.{}.png", distance),
+                args.debug,
+            );
+            if round < black_rounds {
+                replace_with_surrounding_extreme(&mut local_black, distance, &pixelops::darker)
+            }
+            save_debug_image(
+                &local_black,
+                format!("darkest.{}.png", distance),
+                args.debug,
+            );
         }
-        let brightest_stretched = stretch(brightest, 2u32.pow(rounds - 1));
-        let darkest_stretched = stretch(darkest, 2u32.pow(rounds - 1));
-        difference(brightest_stretched, darkest_stretched)
-            .save(cli::get_out_fname(&f))
-            .unwrap();
+        let black_center = 2u32.pow(black_rounds - 1);
+        center_and_stretch(&mut local_black, black_center);
+        save_debug_image(
+            &local_black,
+            format!("darkest.stretched.{}.png", black_center),
+            args.debug,
+        );
+        let white_center = 2u32.pow(white_rounds - 1);
+        center_and_stretch(&mut local_white, white_center);
+        save_debug_image(
+            &local_white,
+            format!("brightest.stretched.{}.png", white_center),
+            args.debug,
+        );
+
+        let mut local_range = local_white;
+        imageops::subtract(&mut local_range, &local_black);
+        save_debug_image(&local_range, "color_range.png".to_string(), args.debug);
+
+        let mut corrected_image = original_image;
+        local_equalize(&mut corrected_image, local_black, local_range, args.debug);
+        let mut distribution = global_equalization::get_distribution(&corrected_image);
+        let (global_black, global_white) =
+            global_equalization::get_distribution_local_extrema(&mut distribution, args.debug);
+        if global_white > global_black && global_black > 0 && global_white < 255 {
+            let global_range = global_white - global_black;
+            if args.debug {
+                println!(
+                    "{}..{} range is {}",
+                    global_black, global_white, global_range
+                )
+            }
+            for p in corrected_image.pixels_mut() {
+                *p = Luma([pixelops::equalize(p[0], global_black, global_range)])
+            }
+        }
+        corrected_image.save(cli::get_out_fname(&f)).unwrap();
     }
 }
